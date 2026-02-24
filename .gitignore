@@ -15,9 +15,12 @@ infer_log/
 *.log
 log.txt
 save_ckpt/
+wget-log
 
 # dev tools
 .vscode
+.claude
+.cursor
 
 # docs
 lazyllm_chroma/
@@ -60,3 +63,4 @@ docs/zh/assets
 # build directories
 build*
 lazyllm_cpp.egg-info/
+!build*.sh

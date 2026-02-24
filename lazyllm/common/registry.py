@@ -2,6 +2,8 @@ import builtins
 import functools
 import lazyllm
 import re
+import sys
+from typing import Union, List
 from .bind import _MetaBind
 from ..configs import config
 from typing import Optional
@@ -74,6 +76,13 @@ class LazyDict(dict):
         assert isinstance(key, str), 'default key must be str'
         self._default = key.lower()
 
+    def __contains__(self, key):
+        try:
+            _ = self[self._match(key)]
+            return True
+        except (AttributeError, KeyError):
+            return False
+
 
 group_template = '''\
 class LazyLLM{name}Base(LazyLLMRegisterMetaClass.all_clses[\'{base}\'.lower()].base):
@@ -83,15 +92,18 @@ class LazyLLM{name}Base(LazyLLMRegisterMetaClass.all_clses[\'{base}\'.lower()].b
 config.add('use_builtin', bool, False, 'USE_BUILTIN',
            description='Whether to use registry modules in python builtin.')
 
+
 class LazyLLMRegisterMetaClass(_MetaBind):
     all_clses = LazyDict()
 
     def __new__(metas, name, bases, attrs):
         new_cls = type.__new__(metas, name, bases, attrs)
+        if attrs.get('__lazyllm_registry_disable__', False) is True: return new_cls
         if name.startswith('LazyLLM') and name.endswith('Base'):
-            ori = re.match('(LazyLLM)(.*)(Base)', name.split('.')[-1])[2]
+            ori = new_cls.__dict__.get('__lazyllm_registry_key__', re.match('(LazyLLM)(.*)(Base)', name)[2])
             group = ori.lower()
-            new_cls._lazy_llm_group = f'{getattr(new_cls, "_lazy_llm_group", "")}.{group}'.strip('.')
+            ori_group = getattr(new_cls, '_lazy_llm_group', '')
+            new_cls._lazy_llm_group = f'{ori_group}.{group}'.strip('.')
             ld = LazyDict(group, new_cls)
             if new_cls._lazy_llm_group == group:
                 for m in (builtins, lazyllm) if config['use_builtin'] else (lazyllm,):
@@ -100,11 +112,15 @@ class LazyLLMRegisterMetaClass(_MetaBind):
                     setattr(m, group, ld)
                     setattr(m, ori, ld)
             LazyLLMRegisterMetaClass.all_clses[new_cls._lazy_llm_group] = ld
+            if (f := getattr(new_cls, '__lazyllm_after_registry_hook__', None)):
+                f(new_cls, ori_group, group, isleaf=False)
         elif hasattr(new_cls, '_lazy_llm_group'):
             group = LazyLLMRegisterMetaClass.all_clses[new_cls._lazy_llm_group]
-            assert new_cls.__name__ not in group, (
-                f'duplicate class \'{name}\' in group {new_cls._lazy_llm_group}')
-            group[new_cls.__name__] = new_cls
+            name = new_cls.__dict__.get('__lazyllm_registry_key__', name)
+            assert name not in group, f'duplicate class \'{name}\' in group {new_cls._lazy_llm_group}'
+            group[name] = new_cls
+            if (f := getattr(new_cls, '__lazyllm_after_registry_hook__', None)):
+                f(new_cls, new_cls._lazy_llm_group, name, isleaf=True)
         return new_cls
 
 
@@ -132,14 +148,24 @@ def bind_to_instance(func):
     return wrapper
 
 class Register(object):
-    def __init__(self, base, fnames, template: str = reg_template, default_group: Optional[str] = None):
+    def __init__(self, base, fnames, template: str = reg_template, default_group: Optional[str] = None,
+                 allowed_parameter: Optional[Union[str, List[str]]] = None):
         self.basecls = base
         self.fnames = [fnames] if isinstance(fnames, str) else fnames
         self.template = template
         self._default_group = default_group
+        if isinstance(allowed_parameter, str):
+            self._allowed_parameter = {allowed_parameter}
+        elif isinstance(allowed_parameter, list):
+            assert all(isinstance(p, str) for p in allowed_parameter), 'allowed_parameter must be list of str'
+            self._allowed_parameter = set(allowed_parameter)
+        elif allowed_parameter is None:
+            self._allowed_parameter = set()
+        else:
+            raise TypeError('allowed_parameter must be str or list[str]')
         assert len(self.fnames) > 0, 'At least one function should be given for overwrite.'
 
-    def _wrap(self, cls, *, rewrite_func=None):
+    def _wrap(self, cls, *, rewrite_func=None, **kwargs):
         cls = cls.__name__ if isinstance(cls, type) else cls
         cls = re.match('(LazyLLM)(.*)(Base)', cls.split('.')[-1])[2] \
             if (cls.startswith('LazyLLM') and cls.endswith('Base')) else cls
@@ -165,16 +191,26 @@ class Register(object):
                 name=func_name + cls.split('.')[-1].capitalize(), base=cls))
             # 'func' cannot be recognized by exec, so we use 'setattr' instead
             f = LazyLLMRegisterMetaClass.all_clses[cls.lower()].__getattr__(func_name)
+
+            # Support multiprocessing: Register the class in the module where the function is defined
+            if func.__module__ in sys.modules:
+                setattr(sys.modules[func.__module__], f.__name__, f)
+                f.__module__ = func.__module__
+
             f.__name__ = func_name
             setattr(f, rewrite_func, bind_to_instance(func))
+            for k, v in kwargs.items():
+                setattr(f, k, v)
             return func
         return impl
 
-    def __call__(self, f, *, rewrite_func=None):
+    def __call__(self, f, *, rewrite_func=None, **kwargs):
         if not isinstance(f, (str, type)):
             assert self._default_group, 'default_group is not set, please set it by your register decorator'
             return self._wrap(self._default_group)(f)
-        return self._wrap(f, rewrite_func=rewrite_func)
+        assert all(k in self._allowed_parameter for k in kwargs.keys()), \
+            f'Only allowed parameters: {self._allowed_parameter}, but got {kwargs.keys()}'
+        return self._wrap(f, rewrite_func=rewrite_func, **kwargs)
 
     def __getattr__(self, name):
         if name not in self.fnames:
@@ -185,4 +221,4 @@ class Register(object):
         return impl
 
     def new_group(self, group_name):
-        exec('class LazyLLM{name}Base(self.basecls):\n    pass\n'.format(name=group_name))
+        return type(f'LazyLLM{group_name}Base', (self.basecls,), {})

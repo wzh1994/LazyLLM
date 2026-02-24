@@ -8,20 +8,33 @@ from lazyllm.launcher import cleanup
 from lazyllm.tools.infer_service.serve import InferServer
 from urllib.parse import urlparse
 import pytest
+import unittest
 
 
-class TestInferServer:
-    def setup_method(self):
-        self.infer_server = lazyllm.ServerModule(InferServer(), launcher=lazyllm.launcher.EmptyLauncher(sync=False))
-        self.infer_server.start()()
-        parsed_url = urlparse(self.infer_server._url)
-        self.infer_server_url = f'{parsed_url.scheme}://{parsed_url.netloc}'
+class TestInferServer(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.infer_server = lazyllm.ServerModule(InferServer(), launcher=lazyllm.launcher.EmptyLauncher(sync=False))
+        cls.infer_server.start()()
+        parsed_url = urlparse(cls.infer_server._url)
+        cls.infer_server_url = f'{parsed_url.scheme}://{parsed_url.netloc}'
         token = '123'
-        self.headers = {'token': token}
+        cls.headers = {'token': token}
+        LightEngine().reset()
+        lazyllm.FileSystemQueue().dequeue()
+        lazyllm.FileSystemQueue(klass='lazy_trace').dequeue()
 
-    def teardown_method(self):
-        self.infer_server.stop()
+    @classmethod
+    def tearDownClass(cls):
+        cls.infer_server.stop()
         cleanup()
+
+    @pytest.fixture(autouse=True)
+    def run_around_tests(self):
+        yield
+        LightEngine().reset()
+        lazyllm.FileSystemQueue().dequeue()
+        lazyllm.FileSystemQueue(klass='lazy_trace').dequeue()
 
     def deploy_inference_service(self, model_name, deploy_method='auto', num_gpus=1):
         service_name = 'test_engine_infer_' + uuid.uuid4().hex
@@ -41,12 +54,16 @@ class TestInferServer:
             assert response.status_code == 200
             response_data = response.json()
             if response_data['status'] == 'Ready':
-                return model_name, response_data['deploy_method'], response_data['endpoint']
+                return model_name, response_data['deploy_method'], response_data['endpoint'], service_name
             elif response_data['status'] in ('Invalid', 'Cancelled', 'Failed'):
                 raise RuntimeError(f'Deploy service failed. status is {response_data["status"]}')
             time.sleep(10)
 
         raise TimeoutError('inference service deploy timeout')
+
+    def delete_inference_service(self, service_name):
+        response = requests.delete(f'{self.infer_server_url}/v1/inference_services/{service_name}', headers=self.headers)
+        assert response.status_code == 200
 
     @pytest.mark.run_on_change(
         'lazyllm/tools/infer_service/serve.py',
@@ -54,7 +71,7 @@ class TestInferServer:
         'lazyllm/engine/lightengine.py')
     def test_engine_infer_server(self):
         model_name = 'internlm2-chat-7b'
-        model_name, deploy_method, url = self.deploy_inference_service(model_name)
+        model_name, deploy_method, url, service_name = self.deploy_inference_service(model_name)
 
         model = lazyllm.TrainableModule(model_name).deploy_method(getattr(lazyllm.deploy, deploy_method), url=url)
         assert model._impl._get_deploy_tasks.flag
@@ -68,17 +85,20 @@ class TestInferServer:
         r = engine.run(gid, '1 + 1 = ?')
         assert '2' in r
 
+        self.delete_inference_service(service_name)
+
     @pytest.mark.run_on_change(
         'lazyllm/tools/infer_service/serve.py',
         'lazyllm/tools/services/services.py',
         'lazyllm/engine/lightengine.py')
     def test_engine_infer_server_vqa(self):
         model_name = 'InternVL3_5-1B'
-        model_name, deploy_method, url = self.deploy_inference_service(model_name, deploy_method='lmdeploy', num_gpus=1)
+        model_name, deploy_method, url, service_name = self.deploy_inference_service(
+            model_name, deploy_method='lmdeploy', num_gpus=1)
         model = lazyllm.TrainableModule(model_name).deploy_method(getattr(lazyllm.deploy, deploy_method), url=url)
         assert model._impl._get_deploy_tasks.flag
         r = model('这张图片描述的是什么？', lazyllm_files=os.path.join(lazyllm.config['data_path'], 'ci_data/ji.jpg'))
-        assert '鸡' in r or 'chicken' in r
+        assert '鸡' in r or 'chicken' in r or 'rooster' in r
 
         engine = LightEngine()
         nodes = [dict(id='0', kind='VQA', name='vqa',
@@ -86,7 +106,9 @@ class TestInferServer:
         gid = engine.start(nodes)
 
         r = engine.run(gid, '这张图片描述的是什么？', _lazyllm_files=os.path.join(lazyllm.config['data_path'], 'ci_data/ji.jpg'))
-        assert '鸡' in r or 'chicken' in r
+        assert '鸡' in r or 'chicken' in r or 'rooster' in r
+
+        self.delete_inference_service(service_name)
 
     @pytest.mark.run_on_change(
         'lazyllm/tools/infer_service/serve.py',
@@ -94,7 +116,7 @@ class TestInferServer:
         'lazyllm/engine/lightengine.py')
     def test_engine_infer_server_tts(self):
         model_name = 'bark'
-        model_name, deploy_method, url = self.deploy_inference_service(model_name)
+        model_name, deploy_method, url, service_name = self.deploy_inference_service(model_name)
         model = lazyllm.TrainableModule(model_name).deploy_method(getattr(lazyllm.deploy, deploy_method), url=url)
         assert model._impl._get_deploy_tasks.flag
         assert '.wav' in model('你好啊，很高兴认识你。')
@@ -106,3 +128,5 @@ class TestInferServer:
 
         r = engine.run(gid, '这张图片描述的是什么？')
         assert '.wav' in r
+
+        self.delete_inference_service(service_name)

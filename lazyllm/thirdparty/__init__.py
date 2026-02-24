@@ -3,10 +3,12 @@ import toml
 import re
 import os
 import lazyllm
-from typing import List
+from typing import List, Any
 from lazyllm.common import LOG
+from lazyllm.configs import config
 from .modules import modules
 from pathlib import Path
+from functools import lru_cache
 
 package_name_map = {
     'huggingface_hub': 'huggingface-hub',
@@ -19,14 +21,23 @@ package_name_map = {
     'opensearchpy': 'opensearch-py',
     'memu': 'memu-py',
     'mem0': 'mem0ai',
+    'pptx': 'python-pptx',
+    'docx': 'python-docx',
+    'bs4': 'beautifulsoup4',
+    'Stemmer': 'pystemmer',
+    'psycopg2': 'psycopg2-binary',
+    'yaml': 'pyyaml',
 }
+
+package_name_map_reverse = {v: k for k, v in package_name_map.items()}
+module_names = [m[0] if isinstance(m, list) else m for m in modules]
 
 requirements = {}
 
 def get_pip_install_cmd(packages_to_install: List[str]):
     assert len(packages_to_install) > 0
     if len(requirements) == 0:
-        prep_req_dict()
+        prepare_requirements_dict()
     install_parts = []
     for name in packages_to_install:
         if name in package_name_map:
@@ -44,13 +55,20 @@ def split_package_version(s: str, pattern: re.Pattern):
     version = m.group('version') or ''
     return name, version
 
-def prep_req_dict():
+def load_toml_dict() -> dict[str, Any]:
     toml_file_path = Path(__file__).resolve().parents[2] / 'pyproject.toml'
+    if not toml_file_path.exists():
+        toml_file_path = os.path.join(lazyllm.__path__[0], 'pyproject.toml')
+
     try:
         with open(toml_file_path, 'r') as f:
-            toml_config = toml.load(f)
+            return toml.load(f)
     except FileNotFoundError:
-        LOG.error('pyproject.toml is missing. Cannot extract required dependencies.')
+        LOG.error('pyproject.toml is missing. Please reinstall LazyLLM.')
+        raise FileNotFoundError('pyproject.toml is missing. Please reinstall LazyLLM.')
+
+def prepare_requirements_dict():
+    toml_config = load_toml_dict()
 
     pattern = re.compile(r'''
         ^\s*
@@ -141,29 +159,26 @@ def check_package_installed(package_name: str | List[str]) -> bool:
             return False
     return True
 
+@lru_cache
 def load_toml_dep_group(group_name: str) -> List[str]:
-    toml_file_path = Path(__file__).resolve().parents[2] / 'pyproject.toml'
-    if not toml_file_path.exists():
-        toml_file_path = os.path.join(lazyllm.__path__[0], 'pyproject.toml')
-
     try:
-        with open(toml_file_path, 'r') as f:
-            return toml.load(f)['tool']['poetry']['extras'][group_name]
-    except FileNotFoundError:
-        LOG.error('pyproject.toml is missing. Please reinstall LazyLLM.')
-        raise FileNotFoundError('pyproject.toml is missing. Please reinstall LazyLLM.')
+        toml_config = load_toml_dict()
+        return toml_config['tool']['poetry']['extras'][group_name]
     except KeyError:
         LOG.error(f'Group {group_name} not found in pyproject.toml.')
         raise KeyError(f'''Group {group_name} not found in pyproject.toml.
 You cloud report issue to https://github.com/LazyAGI/LazyLLM in case specific deps group needed.''')
 
+@lru_cache
 def check_dependency_by_group(group_name: str):
     missing_pack = []
     for name in load_toml_dep_group(group_name):
-        if not check_package_installed(name):
+        real_name = package_name_map_reverse.get(name, name)
+        if not (config['init_doc'] and real_name in module_names or check_package_installed(real_name)):
             missing_pack.append(name)
     if len(missing_pack) > 0:
-        LOG.error(f'Missing package(s): {missing_pack}\nYou can install them by:\n    lazyllm install {group_name}')
-        raise ImportError(f'Missing package(s): {missing_pack}')
+        msg = f'Missing package(s): {missing_pack}\nYou can install them by:\n    lazyllm install {group_name}'
+        LOG.error(msg)
+        raise ImportError(msg)
     else:
         return True

@@ -12,7 +12,7 @@ from .hybrid import HybridStore, MapStore
 from ..default_index import DefaultIndex
 from ..utils import parallel_do_embedding
 
-from ..doc_node import DocNode, QADocNode, ImageDocNode
+from ..doc_node import DocNode, QADocNode, ImageDocNode, JsonDocNode, RichDocNode
 from ..index_base import IndexBase
 from ..data_type import DataType
 from ..global_metadata import GlobalMetadataDesc, RAG_DOC_ID, RAG_KB_ID
@@ -211,50 +211,51 @@ class _DocumentStore(object):
             raise
 
     def get_nodes(self, uids: Optional[List[str]] = None, doc_ids: Optional[Set] = None,
-                  group: Optional[str] = None, kb_id: Optional[str] = None, **kwargs) -> List[DocNode]:
+                  group: Optional[str] = None, kb_id: Optional[str] = None,
+                  limit: Optional[int] = None, offset: int = 0, return_total: bool = False,
+                  numbers: Optional[Set] = None, **kwargs) -> Union[List[DocNode], Tuple[List[DocNode], int]]:
         try:
-            segments = self.get_segments(uids, doc_ids, group, kb_id, **kwargs)
-            return [self._deserialize_node(segment) for segment in segments]
+            result = self.get_segments(uids=uids, doc_ids=doc_ids, group=group,
+                                       kb_id=kb_id, numbers=numbers, limit=limit,
+                                       offset=offset, return_total=return_total, **kwargs)
+            if return_total:
+                segments, total = result
+                return [self._deserialize_node(segment) for segment in segments], total
+            return [self._deserialize_node(segment) for segment in result]
         except Exception as e:
             LOG.error(f'[_DocumentStore - {self._algo_name}] Failed to get nodes: {e}')
             raise
 
     def get_segments(self, uids: Optional[List[str]] = None, doc_ids: Optional[Set] = None,
-                     group: Optional[str] = None, kb_id: Optional[str] = None, **kwargs) -> List[dict]:
+                     group: Optional[str] = None, kb_id: Optional[str] = None,
+                     limit: Optional[int] = None, offset: int = 0, return_total: bool = False,
+                     numbers: Optional[Set] = None, **kwargs) -> Union[List[dict], Tuple[List[dict], int]]:
         # get a set of segments by uids
         # get the segments of the whole file -- doc ids only
         # get the segments of a certain group for one file -- doc ids and group (kb_id is optional)
         # forbid to get the segments from multiple kb (only one kb_id is allowed)
-        # TODO: pagination
+        # pagination is applied after merging groups; group=None uses sorted activation order for stability
+        # return_total triggers a full scan to count all matching segments
         try:
-            criteria = {}
-            if uids:
-                criteria = {'uid': uids}
-            if doc_ids:
-                criteria = {RAG_DOC_ID: doc_ids}
-            if kb_id:
-                criteria[RAG_KB_ID] = kb_id
-            # for find method, parent id should be in the criteria
-            if kwargs.get('parent'):
-                criteria['parent'] = kwargs['parent']
-            if not group:
-                groups = self._activated_groups
-            else:
-                groups = [group]
+            limit, offset = self._normalize_pagination(limit, offset)
+            criteria = self._build_get_criteria(uids, doc_ids, kb_id, numbers, kwargs.get('parent'))
+            groups = self._resolve_groups(group)
             segments = []
             for group in groups:
                 if not self.is_group_active(group):
                     LOG.warning(f'[_DocumentStore - {self._algo_name}] Group {group} is not active, skip')
                     continue
                 segments.extend(self.impl.get(self._gen_collection_name(group), criteria, **kwargs))
-            return segments
+            total = len(segments)
+            segments = self._slice_segments(segments, limit, offset)
+            return (segments, total) if return_total else segments
         except Exception as e:
             LOG.error(f'[_DocumentStore - {self._algo_name}] Failed to get segments: {e}')
             raise
 
     def update_doc_meta(self, doc_id: str, metadata: dict, kb_id: str = None) -> None:
         kb_id = metadata.get(RAG_KB_ID, None) if kb_id is None else kb_id
-        segments = self.get_segments(doc_ids=[doc_id], kb_id=kb_id)
+        segments = self.get_segments(doc_ids=[doc_id], kb_id=kb_id, return_total=False)
         if not segments:
             LOG.warning(f'[_DocumentStore] No segments found for doc_id: {doc_id} in dataset: {kb_id}')
             return
@@ -266,6 +267,42 @@ class _DocumentStore(object):
             self.impl.upsert(self._gen_collection_name(group), segments)
         LOG.info(f'[_DocumentStore] Updated metadata for doc_id: {doc_id} in dataset: {kb_id}')
         return
+
+    @staticmethod
+    def _normalize_pagination(limit: Optional[int], offset: Optional[int]) -> Tuple[Optional[int], int]:
+        if offset is None or offset < 0:
+            offset = 0
+        if limit is not None and limit < 0:
+            limit = None
+        return limit, offset
+
+    @staticmethod
+    def _slice_segments(segments: List[dict], limit: Optional[int], offset: int) -> List[dict]:
+        if offset > 0 or limit is not None:
+            end = None if limit is None else offset + limit
+            return segments[offset:end]
+        return segments
+
+    def _resolve_groups(self, group: Optional[str]) -> List[str]:
+        if not group:
+            return sorted(self._activated_groups)
+        return [group]
+
+    def _build_get_criteria(self, uids: Optional[List[str]], doc_ids: Optional[Set],
+                            kb_id: Optional[str], numbers: Optional[Set] = None,
+                            parent: Optional[Union[str, List[str]]] = None) -> Dict[str, Any]:
+        criteria: Dict[str, Any] = {}
+        if uids:
+            criteria = {'uid': uids}
+        if doc_ids:
+            criteria[RAG_DOC_ID] = list(set(doc_ids))
+        if kb_id:
+            criteria[RAG_KB_ID] = kb_id
+        if numbers:
+            criteria['number'] = list(set(numbers))
+        if parent:
+            criteria['parent'] = parent
+        return criteria
 
     def query(self, query: str, group_name: str, similarity_name: Optional[str] = None,
               similarity_cut_off: Union[float, Dict[str, float]] = float('-inf'),
@@ -361,6 +398,12 @@ class _DocumentStore(object):
         elif isinstance(node, ImageDocNode):
             segment.type = SegmentType.IMAGE.value
             segment.image_keys = [node.image_path] if node.image_path else []
+        elif isinstance(node, JsonDocNode):
+            segment.type = SegmentType.JSON.value
+            segment.content = node._serialize_content()
+        elif isinstance(node, RichDocNode):
+            segment.type = SegmentType.RICH.value
+            segment.content = node._serialize_nodes()
         res = segment.model_dump()
         # For speed up, add embedding after serialization
         if node.embedding:
@@ -369,22 +412,26 @@ class _DocumentStore(object):
 
     def _deserialize_node(self, data: dict, score: Optional[float] = None) -> DocNode:
         segment_type = data.get('type', SegmentType.TEXT.value)
+        common_parm = {
+            'uid': data['uid'],
+            'group': data['group'],
+            'parent': data.get('parent', ''),
+            'metadata': data.get('meta', {}),
+            'global_metadata': data.get('global_meta', {}),
+        }
         if segment_type == SegmentType.QA.value:
-            node = QADocNode(query=data.get('content', ''), answer=data.get('answer', ''), uid=data['uid'],
-                             group=data['group'], parent=data.get('parent', ''),
-                             metadata=data.get('meta', {}),
-                             global_metadata=data.get('global_meta', {}))
+            node = QADocNode(**common_parm, query=data.get('content', ''), answer=data.get('answer', ''))
         elif segment_type == SegmentType.IMAGE.value:
             if not data.get('image_keys', []):
                 raise ValueError('ImageDocNode does have any image_keys')
-            node = ImageDocNode(image_path=data.get('image_keys')[0],
-                                uid=data['uid'], group=data['group'], parent=data.get('parent', ''),
-                                metadata=data.get('meta', {}),
-                                global_metadata=data.get('global_meta', {}))
+            node = ImageDocNode(**common_parm, image_path=data.get('image_keys')[0])
+        elif segment_type == SegmentType.JSON.value:
+            json_content = JsonDocNode._deserialize_content(data.get('content', ''))
+            node = JsonDocNode(**common_parm, content=json_content)
+        elif segment_type == SegmentType.RICH.value:
+            node = RichDocNode(**common_parm, nodes=RichDocNode._deserialize_nodes(data.get('content', '')))
         else:
-            node = DocNode(uid=data['uid'], group=data['group'], content=data.get('content', ''),
-                           parent=data.get('parent', ''), metadata=data.get('meta', {}),
-                           global_metadata=data.get('global_meta', {}))
+            node = DocNode(**common_parm, content=data.get('content', ''))
         node.excluded_embed_metadata_keys = data.get('excluded_embed_metadata_keys', [])
         node.excluded_llm_metadata_keys = data.get('excluded_llm_metadata_keys', [])
         if 'embedding' in data:

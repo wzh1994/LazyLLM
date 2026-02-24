@@ -328,6 +328,14 @@
     members:
     exclude-members: forward
 
+::: lazyllm.tools.LazyLLMAgentBase
+    members:
+    exclude-members: forward
+
+::: lazyllm.tools.SkillManager
+    members:
+    exclude-members: forward
+
 ::: lazyllm.tools.FunctionCall
     members:
     exclude-members: forward
@@ -473,4 +481,12 @@
 
 ::: lazyllm.tools.rag.store.hybrid.sensecore_store.SenseCoreStore
     members:
+    exclude-members:
+
+::: lazyllm.tools.review.tools.chinese_corrector.get_errors
+    members:
+    exclude-members:
+
+::: lazyllm.tools.review.tools.chinese_corrector.ChineseCorrector
+    members: correct, correct_batch
     exclude-members:

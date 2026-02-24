@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '0.7.2'
+__version__ = '0.7.5'
 
 import importlib
 import builtins
-from .configs import config
-from .configs import * # noqa F401 of Config
+from .configs import config, refresh_config, Mode, Config, Namespace as namespace
 from .common import *  # noqa F403
+from . import common, flow
 from .launcher import LazyLLMLaunchersBase
 from .flow import *  # noqa F403
 from .components import (LazyLLMDataprocBase, LazyLLMFinetuneBase, LazyLLMDeployBase,
@@ -17,16 +17,17 @@ from .module import (ModuleBase, ModuleBase as Module, UrlModule, TrainableModul
                      ServerModule, TrialModule, register as module_register,
                      OnlineModule, OnlineChatModule, OnlineEmbeddingModule, AutoModel, OnlineMultiModalModule)
 from .hook import LazyLLMHook, LazyLLMFuncHook
+from .prompt_templates import ActorPrompt, DataPrompt
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from .tools import (Document, Reranker, Retriever, WebModule, ToolManager, FunctionCall,
+    from .tools import (Document, Reranker, Retriever, WebModule, ToolManager, FunctionCall, SkillManager,
                         FunctionCallAgent, fc_register, ReactAgent, PlanAndSolveAgent, ReWOOAgent, SentenceSplitter,
                         LLMParser)
 from .patch import patch_os_env
 from .docs import add_doc
 config.done()
 
-patch_os_env(lambda key, value: config.refresh(key), config.refresh)
+patch_os_env(lambda key, value: refresh_config(key), refresh_config)
 
 del LazyLLMRegisterMetaClass  # noqa F821
 del LazyLLMRegisterMetaABCClass  # noqa F821
@@ -63,6 +64,10 @@ __all__ = [
 
     # configs
     'Mode',
+    'Config',
+    'config',
+    'refresh_config',
+    'namespace',
 
     # module
     'ModuleBase',
@@ -89,6 +94,7 @@ __all__ = [
     'Retriever',
     'Reranker',
     'ToolManager',
+    'SkillManager',
     'FunctionCall',
     'FunctionCallAgent',
     'fc_register',
@@ -97,6 +103,8 @@ __all__ = [
     'PlanAndSolveAgent',
     'ReWOOAgent',
     'SentenceSplitter',
+    'ActorPrompt',
+    'DataPrompt',
 
     # docs
     'add_doc',

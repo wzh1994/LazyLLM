@@ -10,10 +10,12 @@ if TYPE_CHECKING:
         FunctionCall,
         FunctionCallAgent,
         register as fc_register,
+        LazyLLMAgentBase,
         ReactAgent,
         PlanAndSolveAgent,
         ReWOOAgent,
         ModuleTool,
+        SkillManager,
     )
     from .classifier import IntentClassifier
     from .sql import SqlManager, MongoDBManager, DBResult, DBStatus, DBManager
@@ -26,6 +28,8 @@ if TYPE_CHECKING:
     from .eval import (BaseEvaluator, ResponseRelevancy, Faithfulness, LLMContextRecall,
                     NonLLMContextRecall, ContextRelevance)
     from .http_request import HttpRequest, HttpExecutorResponse
+    from .data import data_register
+    from .review import get_errors, ChineseCorrector
 
 
 def __getattr__(name: str):
@@ -61,9 +65,11 @@ _SUBMOD_MAP = {
         'FunctionCall',
         'FunctionCallAgent',
         'fc_register',
+        'LazyLLMAgentBase',
         'ReactAgent',
         'PlanAndSolveAgent',
-        'ReWOOAgent'
+        'ReWOOAgent',
+        'SkillManager',
     ],
     'classifier': ['IntentClassifier'],
     'sql': [
@@ -96,6 +102,13 @@ _SUBMOD_MAP = {
     'http_request': [
         'HttpRequest',
         'HttpExecutorResponse'
+    ],
+    'data': [
+        'data_register'
+    ],
+    'review': [
+        'get_errors',
+        'ChineseCorrector'
     ],
 }
 _SUBMOD_MAP_REVERSE = {v: k for k, vs in _SUBMOD_MAP.items() for v in vs}
