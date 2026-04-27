@@ -4504,6 +4504,24 @@ Start the document processing consumer thread. This method will start the worker
 If the worker thread number is set to greater than 1 in the initialization, multiple worker threads will be started, otherwise only one worker thread will be started.
 ''')
 
+add_chinese_doc('rag.parsing_service.worker.DocumentProcessorWorker.set_reader', '''
+为 Worker 设置全局文件读取器。该方法通常由 ``DocumentProcessor`` 在注册 Worker 后自动调用，用于将 ``DirectoryReader`` 实例注入到 Worker 中，使其在处理文档添加和重解析任务时能够读取文件内容。
+
+同一 Worker 实例只允许设置一次 reader，若多次调用且传入不同的 reader 实例，将抛出 ``ValueError``。
+
+Args:
+    reader (DirectoryReader): 文件读取器实例，用于在文档处理任务中读取文件内容。
+''')
+
+add_english_doc('rag.parsing_service.worker.DocumentProcessorWorker.set_reader', '''
+Set the global file reader for this worker. This method is typically called automatically by ``DocumentProcessor`` after worker registration, injecting a ``DirectoryReader`` instance so the worker can read file contents when processing document-add and reparse tasks.
+
+A reader can only be set once per worker instance. Calling this method multiple times with a different reader instance raises a ``ValueError``.
+
+Args:
+    reader (DirectoryReader): The file reader instance used to read file contents during document processing tasks.
+''')
+
 add_example('rag.parsing_service.worker.DocumentProcessorWorker', '''
 ```python
 db_config = {
