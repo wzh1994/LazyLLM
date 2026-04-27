@@ -133,7 +133,7 @@ def test_explicit_transfer_payload_executes_with_single_mode_and_target():
     _, task_type, payload = impl._parse_task_payload(task)
     processor = _DummyProcessor()
 
-    impl._exec_transfer_task(processor, 'transfer-task', payload, node_groups={})
+    impl._exec_transfer_task(processor, 'transfer-task', payload, node_groups={}, name_to_id={})
 
     assert task_type == TaskType.DOC_TRANSFER.value
     assert processor.calls == [{

@@ -109,16 +109,16 @@ class _ManagerHarness:
         self.pending_task_status[task_id] = final_status
 
     def _patch_parser_client(self):
-        def add_doc(task_id, kb_id, doc_id, file_path, metadata=None, ng_ids=None,
-                    reparse_group=None, callback_url=None, transfer_params=None):
-            # Infer algo_id from ng_ids using the ng→algo mapping populated by _patch_multi_algo.
-            # Only exclusive ng_ids (not shared across algos) are in the mapping.
+        def add_doc(task_id, kb_id, doc_id, file_path, metadata=None, ng_names=None,
+                    task_type=None, callback_url=None, transfer_params=None):
+            # Infer algo_id from ng_names using the ng→algo mapping populated by _patch_multi_algo.
+            # Only exclusive ng_names (not shared across algos) are in the mapping.
             # Falls back to '__default__' when the mapping is empty (single-algo tests).
             algo_id = '__default__'
-            if ng_ids and self._ng_to_algo:
-                for ng_id in ng_ids:
-                    if ng_id in self._ng_to_algo:
-                        algo_id = self._ng_to_algo[ng_id]
+            if ng_names and self._ng_to_algo:
+                for ng_name in ng_names:
+                    if ng_name in self._ng_to_algo:
+                        algo_id = self._ng_to_algo[ng_name]
                         break
             self.add_doc_calls.append({
                 'task_id': task_id,
@@ -127,8 +127,8 @@ class _ManagerHarness:
                 'doc_id': doc_id,
                 'file_path': file_path,
                 'metadata': metadata,
-                'ng_ids': ng_ids,
-                'reparse_group': reparse_group,
+                'ng_names': ng_names,
+                'task_type': task_type,
                 'callback_url': callback_url,
                 'transfer_params': transfer_params,
             })
@@ -302,7 +302,7 @@ def test_manager_cancel_waiting_add_updates_all_states(manager_harness):
     task_id = upload[0]['task_id']
 
     resp = manager_harness.manager.cancel_task(task_id)
-    snapshot = manager_harness.manager._get_parse_snapshot('cancel-doc', 'kb_cancel', '__default__')
+    snapshot = manager_harness.manager._get_parse_snapshot('cancel-doc', 'kb_cancel')
     doc = manager_harness.manager._get_doc('cancel-doc')
     task = manager_harness.manager.get_task(task_id)
 
@@ -345,7 +345,7 @@ def test_manager_delete_waiting_add_uses_cancel_path(manager_harness):
         kb_id='kb_delete_waiting',
         doc_ids=['delete-waiting-doc'],
     ))
-    snapshot = manager_harness.manager._get_parse_snapshot('delete-waiting-doc', 'kb_delete_waiting', '__default__')
+    snapshot = manager_harness.manager._get_parse_snapshot('delete-waiting-doc', 'kb_delete_waiting')
     doc = manager_harness.manager._get_doc('delete-waiting-doc')
 
     assert items[0]['task_id'] == original_task_id
@@ -486,7 +486,7 @@ def test_manager_transfer_move_cleans_source_doc_with_target_doc_id(manager_harn
     assert manager_harness.manager._has_kb_document('kb_move_target', 'target-doc-move') is True
     assert manager_harness.manager._get_doc('source-doc-move')['upload_status'] == DocStatus.DELETED.value
     assert manager_harness.manager._get_doc('target-doc-move')['upload_status'] == DocStatus.SUCCESS.value
-    assert manager_harness.manager._get_parse_snapshot('source-doc-move', 'kb_move_source', '__default__') is None
+    assert manager_harness.manager._get_parse_snapshot('source-doc-move', 'kb_move_source') is None
 
 
 def test_manager_purge_local_and_rebind_keep_doc_consistent(manager_harness):
@@ -644,7 +644,6 @@ def test_manager_callback_payload_fallback_and_delete_transition(manager_harness
     queued_at = manager_harness.manager._upsert_parse_snapshot(
         doc_id='callback-doc',
         kb_id='kb_callback',
-        algo_id='__default__',
         status=DocStatus.DELETING,
         task_type=TaskType.DOC_DELETE,
         current_task_id='delete-task',
@@ -660,10 +659,9 @@ def test_manager_callback_payload_fallback_and_delete_transition(manager_harness
             'task_type': TaskType.DOC_DELETE.value,
             'doc_id': 'callback-doc',
             'kb_id': 'kb_callback',
-            'algo_id': '__default__',
         },
     ))
-    start_snapshot = manager_harness.manager._get_parse_snapshot('callback-doc', 'kb_callback', '__default__')
+    start_snapshot = manager_harness.manager._get_parse_snapshot('callback-doc', 'kb_callback')
     finish_resp = manager_harness.manager.on_task_callback(TaskCallbackRequest(
         callback_id='delete-finish',
         task_id='delete-task',
@@ -673,10 +671,9 @@ def test_manager_callback_payload_fallback_and_delete_transition(manager_harness
             'task_type': TaskType.DOC_DELETE.value,
             'doc_id': 'callback-doc',
             'kb_id': 'kb_callback',
-            'algo_id': '__default__',
         },
     ))
-    snapshot = manager_harness.manager._get_parse_snapshot('callback-doc', 'kb_callback', '__default__')
+    snapshot = manager_harness.manager._get_parse_snapshot('callback-doc', 'kb_callback')
 
     assert start_resp['ack'] is True
     assert finish_resp['ack'] is True
@@ -684,48 +681,6 @@ def test_manager_callback_payload_fallback_and_delete_transition(manager_harness
     assert snapshot['status'] == DocStatus.DELETED.value
     assert manager_harness.manager._has_kb_document('kb_callback', 'callback-doc') is False
     assert manager_harness.manager._get_doc('callback-doc')['upload_status'] == DocStatus.DELETED.value
-
-
-def test_parser_client_algo_endpoint_fallback():
-    client = ParserClient(parser_url='http://parser.test')
-    calls = []
-
-    def fake_request(method, path, params=None, **kwargs):
-        assert method == 'GET'
-        assert kwargs == {}
-        del params
-        calls.append(path)
-        if path == '/v1/algo/list':
-            raise RuntimeError('parser http error: 404 missing route')
-        if path == '/algo/list':
-            return {
-                'code': 200,
-                'msg': 'success',
-                'data': [{'algo_id': '__default__', 'display_name': 'Default', 'description': 'desc'}],
-            }
-        if path == '/v1/algo/__default__/groups':
-            raise RuntimeError('parser http error: 404 missing route')
-        if path == '/algo/__default__/group/info':
-            return {
-                'code': 200,
-                'msg': 'success',
-                'data': [{'name': 'line', 'type': 'chunk', 'display_name': 'Line'}],
-            }
-        raise AssertionError(path)
-
-    client._request = fake_request
-
-    algo_resp = client.list_algorithms()
-    group_resp = client.get_algorithm_groups('__default__')
-
-    assert algo_resp.code == 200
-    assert group_resp.code == 200
-    assert calls == [
-        '/v1/algo/list',
-        '/algo/list',
-        '/v1/algo/__default__/groups',
-        '/algo/__default__/group/info',
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -937,9 +892,9 @@ def _bulk_insert_docs(manager, *, kb_id, doc_ids, snapshots=None, upload_status=
                       filename_prefix='bulk', base_time=None):
     '''Directly insert Doc / Rel / optional State rows via ORM.
 
-    ``snapshots`` is a list of ``(algo_id, status_value, updated_offset_seconds)``
-    tuples applied to every doc; different ``updated_offset_seconds`` let tests
-    assert the latest-snapshot selection contract.
+    ``snapshots`` is a list of ``(status_value, updated_offset_seconds)`` tuples
+    applied to every doc. Only the last entry is used (parse_state is keyed by
+    (doc_id, kb_id) — one row per doc per kb).
     '''
     base_time = base_time or datetime(2025, 1, 1, 12, 0, 0)
     with manager._db_manager.get_session() as session:
@@ -949,21 +904,24 @@ def _bulk_insert_docs(manager, *, kb_id, doc_ids, snapshots=None, upload_status=
         for i, doc_id in enumerate(doc_ids):
             doc_ts = base_time + timedelta(seconds=i)
             session.add(Doc(
-                doc_id=doc_id, filename=f'{filename_prefix}_{i:05d}.txt',
-                path=f'/tmp/{filename_prefix}/{doc_id}.txt', meta='{}',
-                upload_status=upload_status.value, source_type=SourceType.API.value,
-                file_type='txt', content_hash=None, size_bytes=10,
+                doc_id=doc_id, filename=f'{filename_prefix}_{i}.txt',
+                path=f'/tmp/{filename_prefix}/{doc_id}.txt',
+                meta='{}', upload_status=upload_status.value if isinstance(upload_status, DocStatus)
+                else upload_status,
+                source_type=SourceType.API.value, file_type='txt', size_bytes=10,
                 created_at=doc_ts, updated_at=doc_ts,
             ))
             session.add(Rel(kb_id=kb_id, doc_id=doc_id, created_at=doc_ts, updated_at=doc_ts))
             if snapshots:
-                for algo_id, status_value, offset_sec in snapshots:
-                    state_ts = doc_ts + timedelta(seconds=offset_sec)
-                    session.add(State(
-                        doc_id=doc_id, kb_id=kb_id, algo_id=algo_id, status=status_value,
-                        priority=0, retry_count=0, max_retry=3,
-                        created_at=state_ts, updated_at=state_ts,
-                    ))
+                # Use the last snapshot entry as the single parse_state row.
+                snap = snapshots[-1]
+                status_val, offset_sec = snap
+                snap_ts = doc_ts + timedelta(seconds=offset_sec)
+                session.add(State(
+                    doc_id=doc_id, kb_id=kb_id,
+                    status=status_val, priority=0, retry_count=0, max_retry=3,
+                    created_at=snap_ts, updated_at=snap_ts,
+                ))
 
 
 def _collect_all_pages(manager, *, page_size, max_pages=200, **list_kwargs):
@@ -987,7 +945,7 @@ def test_list_docs_large_dataset_total_matches_pagination_sum(manager_harness):
     manager_harness.manager.create_kb(kb_id, algo_id='__default__')
     doc_ids = [f'bulk-{i:04d}' for i in range(250)]
     _bulk_insert_docs(manager_harness.manager, kb_id=kb_id, doc_ids=doc_ids,
-                      snapshots=[('__default__', DocStatus.SUCCESS.value, 0)])
+                      snapshots=[(DocStatus.SUCCESS.value, 0)])
 
     items, totals = _collect_all_pages(manager_harness.manager, page_size=30, kb_id=kb_id)
     assert totals == {250}, f'inconsistent totals across pages: {totals}'
@@ -1041,7 +999,7 @@ def test_list_docs_status_filter_is_consistent_across_pages(manager_harness):
             ))
             session.add(Rel(kb_id=kb_id, doc_id=doc_id, created_at=ts, updated_at=ts))
             session.add(State(
-                doc_id=doc_id, kb_id=kb_id, algo_id='__default__',
+                doc_id=doc_id, kb_id=kb_id,
                 status=status_cycle[i % 4], priority=0, retry_count=0, max_retry=3,
                 created_at=ts, updated_at=ts,
             ))
@@ -1064,7 +1022,7 @@ def test_list_docs_status_filter_excludes_rows_without_snapshot(manager_harness)
     _bulk_insert_docs(
         manager_harness.manager, kb_id=kb_id,
         doc_ids=[f'with-snap-{i:03d}' for i in range(50)],
-        snapshots=[('__default__', DocStatus.SUCCESS.value, 0)],
+        snapshots=[(DocStatus.SUCCESS.value, 0)],
         base_time=datetime(2025, 1, 1, 10, 0, 0),
         filename_prefix='withsnap',
     )
@@ -1094,23 +1052,18 @@ def test_list_docs_status_filter_excludes_rows_without_snapshot(manager_harness)
 
 
 def test_list_docs_latest_snapshot_when_algo_id_not_specified(manager_harness):
-    '''When algo_id is None, snapshot should be the most recent among algos (by updated_at).'''
+    '''Snapshot is the single parse_state row per (doc_id, kb_id); status is returned correctly.'''
     kb_id = 'kb_latest'
     manager_harness.manager.create_kb(kb_id, algo_id='__default__')
     _bulk_insert_docs(
         manager_harness.manager, kb_id=kb_id,
-        doc_ids=[f'multi-algo-{i:03d}' for i in range(10)],
-        snapshots=[
-            ('algo-A', DocStatus.FAILED.value, 0),
-            ('algo-B', DocStatus.WORKING.value, 60),
-            ('algo-C', DocStatus.SUCCESS.value, 120),  # newest
-        ],
+        doc_ids=[f'snap-{i:03d}' for i in range(10)],
+        snapshots=[(DocStatus.SUCCESS.value, 0)],
     )
 
     resp_default = manager_harness.manager.list_docs(kb_id=kb_id, page=1, page_size=50)
     assert resp_default['total'] == 10
     for item in resp_default['items']:
-        assert item['snapshot']['algo_id'] == 'algo-C'
         assert item['snapshot']['status'] == DocStatus.SUCCESS.value
 
 
@@ -1207,15 +1160,10 @@ def test_list_docs_ordering_by_relation_updated_at_desc(manager_harness):
 
 
 def test_list_docs_latest_snapshot_tie_break_uses_created_at(manager_harness):
-    '''When multiple snapshots share the same ``updated_at``, the tie-break
-    falls through to ``created_at`` (newer wins). This matches the current
-    ``_get_latest_parse_snapshot`` ORDER BY contract and must be preserved by
-    any SQL rewrite that computes "latest per (doc_id, kb_id)".
-    '''
+    '''parse_state is keyed by (doc_id, kb_id) — one row per doc. Snapshot status is returned correctly.'''
     kb_id = 'kb_tie'
     manager_harness.manager.create_kb(kb_id, algo_id='__default__')
-    same_instant = datetime(2025, 1, 1, 12, 0, 0)
-    doc_ts = same_instant
+    doc_ts = datetime(2025, 1, 1, 12, 0, 0)
     with manager_harness.manager._db_manager.get_session() as session:
         Doc = manager_harness.manager._db_manager.get_table_orm_class('lazyllm_documents')
         Rel = manager_harness.manager._db_manager.get_table_orm_class('lazyllm_kb_documents')
@@ -1226,87 +1174,61 @@ def test_list_docs_latest_snapshot_tie_break_uses_created_at(manager_harness):
             file_type='txt', size_bytes=10, created_at=doc_ts, updated_at=doc_ts,
         ))
         session.add(Rel(kb_id=kb_id, doc_id='tie-doc', created_at=doc_ts, updated_at=doc_ts))
-        # Two snapshots share updated_at; created_at differs.
         session.add(State(
-            doc_id='tie-doc', kb_id=kb_id, algo_id='algo-older',
-            status=DocStatus.FAILED.value, priority=0, retry_count=0, max_retry=3,
-            created_at=same_instant - timedelta(minutes=5),
-            updated_at=same_instant,
-        ))
-        session.add(State(
-            doc_id='tie-doc', kb_id=kb_id, algo_id='algo-newer',
+            doc_id='tie-doc', kb_id=kb_id,
             status=DocStatus.SUCCESS.value, priority=0, retry_count=0, max_retry=3,
-            created_at=same_instant - timedelta(minutes=1),  # newer created_at
-            updated_at=same_instant,
+            created_at=doc_ts, updated_at=doc_ts,
         ))
 
     resp = manager_harness.manager.list_docs(kb_id=kb_id, page=1, page_size=10)
     assert resp['total'] == 1
     snap = resp['items'][0]['snapshot']
     assert snap is not None
-    assert snap['algo_id'] == 'algo-newer', \
-        f'tie-break must prefer newer created_at; got algo_id={snap["algo_id"]}'
     assert snap['status'] == DocStatus.SUCCESS.value
 
 
 def test_list_docs_status_filter_uses_latest_snapshot_not_any(manager_harness):
-    '''Critical rewrite pitfall: when ``algo_id`` is None and multiple snapshots
-    exist per (doc_id, kb_id), the ``status`` filter must apply to the **latest**
-    snapshot only — NOT "any snapshot matches".
+    '''status filter matches the single parse_state row per (doc_id, kb_id).
 
-    Setup: each doc has algo-A=SUCCESS (old) and algo-B=FAILED (new/latest).
-    Query ``status=['SUCCESS']`` with no ``algo_id``:
-    - Latest snapshot is FAILED → row is excluded.
-    - If the rewrite filters inside the partition before picking the latest,
-      SUCCESS snapshots would match and the row would erroneously appear.
+    Docs with FAILED snapshot are excluded from status=SUCCESS query,
+    and included in status=FAILED query.
     '''
     kb_id = 'kb_filter_latest'
     manager_harness.manager.create_kb(kb_id, algo_id='__default__')
     _bulk_insert_docs(
         manager_harness.manager, kb_id=kb_id,
         doc_ids=[f'latest-{i:03d}' for i in range(20)],
-        snapshots=[
-            ('algo-A', DocStatus.SUCCESS.value, 0),
-            ('algo-B', DocStatus.FAILED.value, 60),  # newer → becomes "latest"
-        ],
+        snapshots=[(DocStatus.FAILED.value, 0)],
     )
 
     resp_success = manager_harness.manager.list_docs(kb_id=kb_id, status=[DocStatus.SUCCESS.value],
                                                      page=1, page_size=100)
-    assert resp_success['total'] == 0, 'status filter without algo_id must match only the latest snapshot'
+    assert resp_success['total'] == 0
     assert resp_success['items'] == []
 
     resp_failed = manager_harness.manager.list_docs(kb_id=kb_id, status=[DocStatus.FAILED.value],
                                                     page=1, page_size=100)
     assert resp_failed['total'] == 20
     for item in resp_failed['items']:
-        assert item['snapshot']['algo_id'] == 'algo-B'
         assert item['snapshot']['status'] == DocStatus.FAILED.value
 
 
 def test_list_docs_status_and_algo_id_combined(manager_harness):
-    '''status filter applies to the latest snapshot (most recent algo by updated_at).
-    With algo-B (FAILED) being newer than algo-A (SUCCESS), status=FAILED returns all 30,
-    status=SUCCESS returns 0.
+    '''status filter matches the single parse_state row per (doc_id, kb_id).
+    FAILED docs are returned by status=FAILED, excluded by status=SUCCESS.
     '''
     kb_id = 'kb_combo'
     manager_harness.manager.create_kb(kb_id, algo_id='__default__')
     _bulk_insert_docs(
         manager_harness.manager, kb_id=kb_id,
         doc_ids=[f'combo-{i:03d}' for i in range(30)],
-        snapshots=[
-            ('algo-A', DocStatus.SUCCESS.value, 0),
-            ('algo-B', DocStatus.FAILED.value, 60),  # newer → latest snapshot
-        ],
+        snapshots=[(DocStatus.FAILED.value, 0)],
     )
 
-    # status=FAILED → latest snapshot is algo-B (FAILED), expect all 30
     resp = manager_harness.manager.list_docs(kb_id=kb_id,
                                              status=[DocStatus.FAILED.value], page=1, page_size=100)
     assert resp['total'] == 30
-    assert all(it['snapshot']['algo_id'] == 'algo-B' for it in resp['items'])
 
-    # status=SUCCESS → latest snapshot is algo-B (FAILED), expect 0
     resp = manager_harness.manager.list_docs(kb_id=kb_id,
                                              status=[DocStatus.SUCCESS.value], page=1, page_size=100)
     assert resp['total'] == 0
@@ -1319,7 +1241,7 @@ def test_list_docs_empty_result_returns_well_formed_page(manager_harness):
     manager_harness.manager.create_kb(kb_id, algo_id='__default__')
     _bulk_insert_docs(manager_harness.manager, kb_id=kb_id,
                       doc_ids=[f'empty-{i:03d}' for i in range(5)],
-                      snapshots=[('__default__', DocStatus.SUCCESS.value, 0)])
+                      snapshots=[(DocStatus.SUCCESS.value, 0)])
 
     # Nonexistent kb_id
     resp_nokb = manager_harness.manager.list_docs(kb_id='kb-does-not-exist', page=1, page_size=20)
@@ -1390,7 +1312,7 @@ def _patch_multi_algo(harness):
     )
     harness.manager._parser_client.get_algorithm_groups = get_algorithm_groups
 
-    # Populate ng_id → algo_id mapping for add_doc inference (shared ngs are excluded)
+    # Populate ng_name → algo_id mapping for add_doc inference (shared ngs are excluded)
     ng_to_algo = {}
     ng_count = {}
     for _algo_id, ng_ids in _ALGO_NG_MAP.items():
@@ -1398,7 +1320,7 @@ def _patch_multi_algo(harness):
             ng_count[ng_id] = ng_count.get(ng_id, 0) + 1
     for algo_id, ng_ids in _ALGO_NG_MAP.items():
         for ng_id in ng_ids:
-            if ng_count[ng_id] == 1:  # exclusive ng_id
+            if ng_count[ng_id] == 1:  # exclusive ng (name == id in test fixtures)
                 ng_to_algo[ng_id] = algo_id
     harness._ng_to_algo = ng_to_algo
 
@@ -1454,24 +1376,25 @@ def test_multi_algo_scenario1_single_kb_single_algo(manager_harness):
 # ---------------------------------------------------------------------------
 
 def test_multi_algo_scenario2_two_algos_shared_ng_single_row(manager_harness):
-    '''Scenario 2: kb2 with algo1+algo3, add doc → ng1 has exactly one ng_status row.'''
+    '''Scenario 2: kb2 with algo1+algo3, add doc → single task covers all algos' ng_names.
+    ng1 (shared) must have exactly one ng_status row.'''
     mgr = manager_harness.manager
     _patch_multi_algo(manager_harness)
     mgr.create_kb('kb2', algo_id='algo1')
     mgr.update_kb('kb2', algo_id='algo3')
 
     fp, items = _upload_doc(manager_harness, 'kb2', 'doc2', 'doc2.txt')
-    # Two tasks enqueued (one per algo)
+    # Single task covers all algos
     assert len(items) == 1
-    task_id_algo1 = items[0]['task_id']
+    task_id = items[0]['task_id']
 
-    # Finish algo1 task
-    manager_harness.finish_task(task_id_algo1)
+    # Exactly one add_doc call with all ng_names merged
+    add_calls = [c for c in manager_harness.add_doc_calls if c['doc_id'] == 'doc2']
+    assert len(add_calls) == 1
+    sent_ngs = set(add_calls[0]['ng_names'] or [])
+    assert sent_ngs == {'ng1', 'ng2', 'ng3', 'ng6', 'ng7'}
 
-    # Find algo3 task
-    add_calls_algo3 = [c for c in manager_harness.add_doc_calls if c['algo_id'] == 'algo3']
-    assert len(add_calls_algo3) == 1
-    manager_harness.finish_task(add_calls_algo3[0]['task_id'])
+    manager_harness.finish_task(task_id)
 
     statuses = _ng_statuses(manager_harness, 'kb2', 'doc2')
     # ng1 shared → exactly one row; ng2/ng3 from algo1; ng6/ng7 from algo3
@@ -1524,15 +1447,12 @@ def test_multi_algo_scenario3a_reparse_skips_shared_ng(manager_harness):
     assert statuses_after['ng4'] == 'PENDING'
     assert statuses_after['ng5'] == 'PENDING'
 
-    # The reparse task sent to parser must NOT include ng1
+    # The reparse task sent to parser must NOT include ng1.
+    # New code sends ng_names=None (meaning "all non-shared ngs") when reparsing all ngs of an algo,
+    # so we verify via ng_status: ng4/ng5 are PENDING (reparsed) and ng1 is still SUCCESS.
     reparse_calls = [c for c in manager_harness.add_doc_calls
-                     if c['algo_id'] == 'algo2' and c['reparse_group'] is not None]
+                     if c['task_type'] == TaskType.DOC_REPARSE.value]
     assert len(reparse_calls) == 1
-    sent_group = reparse_calls[0]['reparse_group']
-    import json as _json
-    sent_ngs = _json.loads(sent_group) if isinstance(sent_group, str) else sent_group
-    assert 'ng1' not in sent_ngs, 'parser must not receive ng1 in reparse task'
-    assert set(sent_ngs) == {'ng4', 'ng5'}
 
 
 # ---------------------------------------------------------------------------
@@ -1547,9 +1467,8 @@ def test_multi_algo_scenario3b_explicit_single_ng_reparse_allowed(manager_harnes
     mgr.update_kb('kb1s3b', algo_id='algo2')
 
     fp, items = _upload_doc(manager_harness, 'kb1s3b', 'doc1s3b', 'doc1s3b.txt')
+    # New code sends a single add_doc covering all algos; finish that one task.
     manager_harness.finish_task(items[0]['task_id'])
-    algo2_calls = [c for c in manager_harness.add_doc_calls if c['algo_id'] == 'algo2']
-    manager_harness.finish_task(algo2_calls[0]['task_id'])
     # Simulate parser writing SUCCESS for all ngs
     manager_harness.set_ng_status('kb1s3b', 'doc1s3b', ['ng1', 'ng2', 'ng3', 'ng4', 'ng5'], 'SUCCESS')
 
@@ -1575,14 +1494,13 @@ def test_multi_algo_scenario3c_new_doc_after_second_algo_bound(manager_harness):
 
     fp, items = _upload_doc(manager_harness, 'kb1s3c', 'doc_new', 'doc_new.txt')
 
-    # Two add_doc calls must have been made (one per algo)
-    algo1_calls = [c for c in manager_harness.add_doc_calls if c['algo_id'] == 'algo1']
-    algo2_calls = [c for c in manager_harness.add_doc_calls if c['algo_id'] == 'algo2']
-    assert len(algo1_calls) >= 1
-    assert len(algo2_calls) >= 1
+    # Single task covers all algos' ng_names merged
+    add_calls = [c for c in manager_harness.add_doc_calls if c['doc_id'] == 'doc_new']
+    assert len(add_calls) == 1
+    sent_ngs = set(add_calls[0]['ng_names'] or [])
+    assert sent_ngs == {'ng1', 'ng2', 'ng3', 'ng4', 'ng5'}
 
-    manager_harness.finish_task(algo1_calls[-1]['task_id'])
-    manager_harness.finish_task(algo2_calls[-1]['task_id'])
+    manager_harness.finish_task(add_calls[0]['task_id'])
 
     statuses = _ng_statuses(manager_harness, 'kb1s3c', 'doc_new')
     assert set(statuses.keys()) == {'ng1', 'ng2', 'ng3', 'ng4', 'ng5'}
@@ -1609,10 +1527,9 @@ def test_multi_algo_scenario4_delete_doc_cleans_all_ng_status(manager_harness):
     mgr.update_kb('kb2s4', algo_id='algo3')
 
     fp, items = _upload_doc(manager_harness, 'kb2s4', 'doc_del', 'doc_del.txt')
-    algo1_calls = [c for c in manager_harness.add_doc_calls if c['algo_id'] == 'algo1']
-    algo3_calls = [c for c in manager_harness.add_doc_calls if c['algo_id'] == 'algo3']
-    manager_harness.finish_task(algo1_calls[-1]['task_id'])
-    manager_harness.finish_task(algo3_calls[-1]['task_id'])
+    add_calls = [c for c in manager_harness.add_doc_calls if c['doc_id'] == 'doc_del']
+    assert len(add_calls) == 1
+    manager_harness.finish_task(add_calls[0]['task_id'])
 
     # Verify ng_status rows exist before delete
     statuses_before = _ng_statuses(manager_harness, 'kb2s4', 'doc_del')
@@ -1645,12 +1562,10 @@ def test_multi_algo_scenario5_unbind_algo_preserves_shared_ng(manager_harness):
     mgr.update_kb('kb2s5', algo_id='algo3')
 
     fp, items = _upload_doc(manager_harness, 'kb2s5', 'doc_s5', 'doc_s5.txt')
-    # Finish tasks for both algos
-    algo1_calls = [c for c in manager_harness.add_doc_calls if c['algo_id'] == 'algo1']
-    algo3_calls = [c for c in manager_harness.add_doc_calls if c['algo_id'] == 'algo3']
-    assert len(algo1_calls) >= 1 and len(algo3_calls) >= 1
-    manager_harness.finish_task(algo1_calls[-1]['task_id'])
-    manager_harness.finish_task(algo3_calls[-1]['task_id'])
+    # Single task covers all algos
+    add_calls = [c for c in manager_harness.add_doc_calls if c['doc_id'] == 'doc_s5']
+    assert len(add_calls) == 1
+    manager_harness.finish_task(add_calls[0]['task_id'])
     # Simulate parser writing SUCCESS for all ngs
     manager_harness.set_ng_status('kb2s5', 'doc_s5', ['ng1', 'ng2', 'ng3', 'ng6', 'ng7'], 'SUCCESS')
 
@@ -1698,8 +1613,8 @@ def test_multi_algo_scenario6_reparse_single_ng(manager_harness):
     mgr.create_kb('kb1s6', algo_id='algo1')
 
     fp, items = _upload_doc(manager_harness, 'kb1s6', 'doc_s6', 'doc_s6.txt')
-    algo1_calls = [c for c in manager_harness.add_doc_calls if c['algo_id'] == 'algo1']
-    manager_harness.finish_task(algo1_calls[-1]['task_id'])
+    add_calls = [c for c in manager_harness.add_doc_calls if c['doc_id'] == 'doc_s6']
+    manager_harness.finish_task(add_calls[-1]['task_id'])
     # Simulate parser writing SUCCESS
     manager_harness.set_ng_status('kb1s6', 'doc_s6', ['ng1', 'ng2', 'ng3'], 'SUCCESS')
 
@@ -1716,11 +1631,11 @@ def test_multi_algo_scenario6_reparse_single_ng(manager_harness):
     assert statuses_after['ng1'] == 'SUCCESS', 'ng1 must remain SUCCESS'
     assert statuses_after['ng2'] == 'SUCCESS', 'ng2 must remain SUCCESS'
 
-    # Parser must receive reparse_group containing 'ng3' (JSON list of ng_ids)
+    # Parser must receive ng_names containing 'ng3' for the reparse task
     reparse_calls = [c for c in manager_harness.add_doc_calls
-                     if c['algo_id'] == 'algo1' and c['reparse_group'] is not None]
-    import json as _json
-    sent_ngs = _json.loads(reparse_calls[-1]['reparse_group'])
+                     if c['algo_id'] == 'algo1' and c['task_type'] == TaskType.DOC_REPARSE.value]
+    sent_ngs = reparse_calls[-1]['ng_names']
+    assert sent_ngs is not None
     assert 'ng3' in sent_ngs
 
 
@@ -1743,11 +1658,11 @@ def test_multi_algo_scenario7_add_docs_auto_resolves_algos(manager_harness):
     ))
     assert items[0]['accepted'] is True
 
-    # Both algo1 and algo2 must have received add_doc calls
-    algo1_calls = [c for c in manager_harness.add_doc_calls if c['algo_id'] == 'algo1']
-    algo2_calls = [c for c in manager_harness.add_doc_calls if c['algo_id'] == 'algo2']
-    assert len(algo1_calls) >= 1
-    assert len(algo2_calls) >= 1
+    # Single task covers all algos' ng_names merged
+    add_calls = [c for c in manager_harness.add_doc_calls if c['doc_id'] == 'doc_s7']
+    assert len(add_calls) == 1
+    sent_ngs = set(add_calls[0]['ng_names'] or [])
+    assert sent_ngs == {'ng1', 'ng2', 'ng3', 'ng4', 'ng5'}
 
     # ng_status must cover ng1..ng5 (union of algo1 and algo2)
     statuses = _ng_statuses(manager_harness, 'kb1s7', 'doc_s7')

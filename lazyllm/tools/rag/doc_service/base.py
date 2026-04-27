@@ -427,7 +427,6 @@ PARSE_STATE_TABLE_INFO = {
          'comment': 'Auto increment ID'},
         {'name': 'doc_id', 'data_type': 'string', 'nullable': False, 'comment': 'Document ID'},
         {'name': 'kb_id', 'data_type': 'string', 'nullable': False, 'comment': 'Knowledge base ID'},
-        {'name': 'algo_id', 'data_type': 'string', 'nullable': False, 'comment': 'Algorithm ID'},
         {'name': 'status', 'data_type': 'string', 'nullable': False, 'comment': 'Current parse status'},
         {'name': 'current_task_id', 'data_type': 'string', 'nullable': True, 'comment': 'Current task ID'},
         {'name': 'task_type', 'data_type': 'string', 'nullable': True, 'comment': 'Current task type'},

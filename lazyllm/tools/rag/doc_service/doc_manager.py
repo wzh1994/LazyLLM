@@ -8,7 +8,6 @@ from uuid import uuid4
 
 import sqlalchemy
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import aliased
 
 from lazyllm import LOG
 
@@ -91,15 +90,13 @@ class DocManager:
             'CREATE UNIQUE INDEX IF NOT EXISTS uq_kb_algorithm ON lazyllm_kb_algorithm(kb_id, algo_id)',
             'CREATE INDEX IF NOT EXISTS idx_kb_algorithm_algo_id ON lazyllm_kb_algorithm(algo_id)',
             'CREATE UNIQUE INDEX IF NOT EXISTS uq_parse_state_key '
-            'ON lazyllm_doc_parse_state(doc_id, kb_id, algo_id)',
-            'CREATE UNIQUE INDEX IF NOT EXISTS uq_parse_state_current_task '
-            'ON lazyllm_doc_parse_state(current_task_id) WHERE current_task_id IS NOT NULL',
+            'ON lazyllm_doc_parse_state(doc_id, kb_id)',
             'CREATE INDEX IF NOT EXISTS idx_parse_sched '
             'ON lazyllm_doc_parse_state(status, task_score, updated_at)',
             'CREATE INDEX IF NOT EXISTS idx_parse_lease '
             'ON lazyllm_doc_parse_state(status, lease_until)',
-            'CREATE INDEX IF NOT EXISTS idx_parse_kb_algo_status '
-            'ON lazyllm_doc_parse_state(kb_id, algo_id, status)',
+            'CREATE INDEX IF NOT EXISTS idx_parse_kb_status '
+            'ON lazyllm_doc_parse_state(kb_id, status)',
             'CREATE INDEX IF NOT EXISTS idx_parse_task_type_status '
             'ON lazyllm_doc_parse_state(task_type, status, updated_at)',
             'CREATE UNIQUE INDEX IF NOT EXISTS uq_idempotency_endpoint_key '
@@ -576,12 +573,12 @@ class DocManager:
             row.updated_at = datetime.now()
             sess.add(row)
 
-    def _get_parse_snapshot(self, doc_id: str, kb_id: str, algo_id: str):
+    def _get_parse_snapshot(self, doc_id: str, kb_id: str):
         with self._db_manager.get_session() as session:
             State = self._db_manager.get_table_orm_class(PARSE_STATE_TABLE_INFO['name'])
             row = (
                 session.query(State)
-                .filter(State.doc_id == doc_id, State.kb_id == kb_id, State.algo_id == algo_id)
+                .filter(State.doc_id == doc_id, State.kb_id == kb_id)
                 .first()
             )
             return _orm_to_dict(row) if row else None
@@ -656,27 +653,12 @@ class DocManager:
         return shared
 
     def _get_latest_parse_snapshot(self, doc_id: str, kb_id: str):
-        with self._db_manager.get_session() as session:
-            State = self._db_manager.get_table_orm_class(PARSE_STATE_TABLE_INFO['name'])
-            row = (
-                session.query(State)
-                .filter(State.doc_id == doc_id, State.kb_id == kb_id)
-                .order_by(State.updated_at.desc(), State.created_at.desc())
-                .first()
-            )
-            return _orm_to_dict(row) if row else None
+        return self._get_parse_snapshot(doc_id, kb_id)
 
     def _delete_parse_snapshots(self, doc_id: str, kb_id: str, session=None):
         with self._db_manager.get_session(session) as sess:
             State = self._db_manager.get_table_orm_class(PARSE_STATE_TABLE_INFO['name'])
             sess.query(State).filter(State.doc_id == doc_id, State.kb_id == kb_id).delete()
-
-    def _delete_parse_snapshot_for_algo(self, doc_id: str, kb_id: str, algo_id: str, session=None):
-        with self._db_manager.get_session(session) as sess:
-            State = self._db_manager.get_table_orm_class(PARSE_STATE_TABLE_INFO['name'])
-            sess.query(State).filter(
-                State.doc_id == doc_id, State.kb_id == kb_id, State.algo_id == algo_id,
-            ).delete()
 
     def _delete_ng_status(self, doc_id: str, kb_id: str, session=None):
         with self._db_manager.get_session(session) as sess:
@@ -694,22 +676,21 @@ class DocManager:
                 NgStatus.node_group_id.in_(ng_ids),
             ).delete(synchronize_session='fetch')
 
-    def _all_algo_snapshots_deleted(self, doc_id: str, kb_id: str) -> bool:
-        '''Return True if every algo's parse_state for (doc_id, kb_id) is DELETED (or absent).'''
+    def _is_doc_parse_deleted(self, doc_id: str, kb_id: str) -> bool:
+        '''Return True if the parse_state for (doc_id, kb_id) is DELETED (or absent).'''
         with self._db_manager.get_session() as session:
             State = self._db_manager.get_table_orm_class(PARSE_STATE_TABLE_INFO['name'])
-            rows = session.query(State).filter(
+            row = session.query(State).filter(
                 State.doc_id == doc_id, State.kb_id == kb_id,
-            ).all()
-            return bool(rows) and all(r.status == DocStatus.DELETED.value for r in rows)
+            ).first()
+            return row is None or row.status == DocStatus.DELETED.value
 
-    def _count_non_deleted_snapshots_for_algo(self, kb_id: str, algo_id: str) -> int:
-        '''Return count of docs in kb that still have a non-DELETED parse_state for algo_id.'''
+    def _count_non_deleted_docs_in_kb(self, kb_id: str) -> int:
+        '''Return count of docs in kb that still have a non-DELETED parse_state.'''
         with self._db_manager.get_session() as session:
             State = self._db_manager.get_table_orm_class(PARSE_STATE_TABLE_INFO['name'])
             return session.query(State).filter(
                 State.kb_id == kb_id,
-                State.algo_id == algo_id,
                 State.status != DocStatus.DELETED.value,
             ).count()
 
@@ -804,7 +785,7 @@ class DocManager:
         return {'kb': kb, 'items': items}
 
     def _assert_action_allowed(self, doc_id: str, kb_id: str, algo_id: str, action: str):
-        snapshot = self._get_parse_snapshot(doc_id, kb_id, algo_id)
+        snapshot = self._get_parse_snapshot(doc_id, kb_id)
         status = snapshot.get('status') if snapshot is not None else None
         if status is None and action in ('add', 'upload'):
             doc = self._get_doc(doc_id)
@@ -829,7 +810,6 @@ class DocManager:
         self,
         doc_id: str,
         kb_id: str,
-        algo_id: str,
         status: DocStatus,
         task_type: Optional[TaskType] = None,
         current_task_id: Optional[str] = None,
@@ -852,14 +832,13 @@ class DocManager:
             State = self._db_manager.get_table_orm_class(PARSE_STATE_TABLE_INFO['name'])
             row = (
                 session.query(State)
-                .filter(State.doc_id == doc_id, State.kb_id == kb_id, State.algo_id == algo_id)
+                .filter(State.doc_id == doc_id, State.kb_id == kb_id)
                 .first()
             )
             if row is None:
                 row = State(
                     doc_id=doc_id,
                     kb_id=kb_id,
-                    algo_id=algo_id,
                     status=status.value,
                     task_type=task_type.value if task_type else None,
                     current_task_id=current_task_id,
@@ -899,7 +878,7 @@ class DocManager:
                 row.finished_at = finished_at
                 row.updated_at = now
             session.add(row)
-        return self._get_parse_snapshot(doc_id, kb_id, algo_id)
+        return self._get_parse_snapshot(doc_id, kb_id)
 
     def _validate_unique_doc_ids(self, doc_ids: List[str], field_name: str = 'doc_id'):
         duplicated = set()
@@ -915,6 +894,24 @@ class DocManager:
                 f'duplicate {field_name} detected',
                 {f'duplicate_{field_name}s': duplicated_list},
             )
+
+    def _resolve_ng_for_task(self, task_type: TaskType, algo_id: str,
+                             algo_ids: List[str], ng_names: Optional[List[str]],
+                             extra_message: Optional[Dict]) -> tuple:
+        '''Returns (resolved_ng_names, ng_ids_for_pending, exclusive_ng_ids).'''
+        exclusive_ng_ids = (
+            (extra_message or {}).get('exclusive_ng_ids') if task_type == TaskType.DOC_DELETE else None
+        )
+        resolved_ng_names: Optional[List[str]] = ng_names
+        ng_ids_for_pending: List[str] = []
+        if len(algo_ids) > 1:
+            name_to_id = self._algo_ids_to_ng_names(algo_ids)
+            resolved_ng_names = list(name_to_id.keys())
+            ng_ids_for_pending = list(name_to_id.values())
+        elif task_type in (TaskType.DOC_ADD, TaskType.DOC_REPARSE, TaskType.DOC_TRANSFER):
+            # Single-algo task: look up ng_ids for PENDING status creation.
+            ng_ids_for_pending = self._get_algo_node_group_ids(algo_id)
+        return resolved_ng_names, ng_ids_for_pending, exclusive_ng_ids
 
     def _create_parser_task(self, task_id: str, doc_id: str, kb_id: str, algo_id: str, task_type: TaskType,
                             ng_names: Optional[List[str]] = None,
@@ -946,21 +943,20 @@ class DocManager:
         return task_id
 
     def _enqueue_task(
-        self, doc_id: str, kb_id: str, algo_id: str, task_type: TaskType,
+        self, doc_id: str, kb_id: str, task_type: TaskType,
+        algo_ids: List[str],
         idempotency_key: Optional[str] = None, priority: int = 0,
         file_path: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
-        algo_ids: Optional[List[str]] = None, ng_names: Optional[List[str]] = None,
+        ng_names: Optional[List[str]] = None,
         cleanup_policy: Optional[str] = None,
         parser_kb_id: Optional[str] = None, transfer_params: Optional[Dict[str, Any]] = None,
         extra_message: Optional[Dict[str, Any]] = None, parser_doc_id: Optional[str] = None,
     ):
-        assert not (algo_ids is not None and ng_names is not None), \
-            'algo_ids and ng_names are mutually exclusive'
+        algo_id = algo_ids[0]
         task_id = str(uuid4())
         task_message = {
             'doc_id': doc_id,
             'kb_id': kb_id,
-            'algo_id': algo_id,
             'file_path': file_path,
             'metadata': metadata,
         }
@@ -976,7 +972,6 @@ class DocManager:
         self._upsert_parse_snapshot(
             doc_id=doc_id,
             kb_id=kb_id,
-            algo_id=algo_id,
             status=parse_status,
             task_type=task_type,
             current_task_id=task_id,
@@ -990,21 +985,8 @@ class DocManager:
             failed_stage=None,
         )
         try:
-            exclusive_ng_ids = (
-                (extra_message or {}).get('exclusive_ng_ids') if task_type == TaskType.DOC_DELETE else None
-            )
-            # Resolve ng_names before submitting to the parser queue.
-            # algo_ids → ng_names conversion happens here; callers may also pass ng_names directly.
-            # ng_ids are only needed for _upsert_ng_status_pending (DOC_ADD).
-            resolved_ng_names: Optional[List[str]] = ng_names  # may be None (= all ngs)
-            ng_ids_for_pending: List[str] = []
-            if algo_ids is not None:
-                name_to_id = self._algo_ids_to_ng_names(algo_ids)
-                resolved_ng_names = list(name_to_id.keys())
-                ng_ids_for_pending = list(name_to_id.values())
-            elif ng_names is not None and task_type == TaskType.DOC_ADD:
-                # need ng_ids for PENDING status; look them up from the single algo_id
-                ng_ids_for_pending = self._get_algo_node_group_ids(algo_id)
+            resolved_ng_names, ng_ids_for_pending, exclusive_ng_ids = self._resolve_ng_for_task(
+                task_type, algo_id, algo_ids, ng_names, extra_message)
             # Insert PENDING status for each node group before submitting the parser task,
             # so that on_task_callback can always find the status rows even if submission fails.
             if task_type == TaskType.DOC_ADD:
@@ -1029,10 +1011,9 @@ class DocManager:
             self._upsert_parse_snapshot(
                 doc_id=doc_id,
                 kb_id=kb_id,
-                algo_id=algo_id,
                 status=DocStatus.FAILED,
                 **self._build_snapshot_update(
-                    self._get_parse_snapshot(doc_id, kb_id, algo_id),
+                    self._get_parse_snapshot(doc_id, kb_id),
                     task_type=task_type,
                     current_task_id=task_id,
                     error_code='PARSER_SUBMIT_FAILED',
@@ -1043,7 +1024,7 @@ class DocManager:
             )
             self._apply_doc_upload_status(doc_id, task_type, DocStatus.FAILED)
             raise
-        return task_id, self._get_parse_snapshot(doc_id, kb_id, algo_id)
+        return task_id, self._get_parse_snapshot(doc_id, kb_id)
 
     def _apply_doc_upload_status(self, doc_id: str, task_type: TaskType, status: DocStatus):
         if task_type == TaskType.DOC_ADD:
@@ -1190,7 +1171,7 @@ class DocManager:
             # Check all algos: every parse_state must be SUCCESS
             for algo_id in src_algos:
                 self._assert_action_allowed(item.doc_id, item.source_kb_id, algo_id, 'transfer')
-                source_snapshot = self._get_parse_snapshot(item.doc_id, item.source_kb_id, algo_id)
+                source_snapshot = self._get_parse_snapshot(item.doc_id, item.source_kb_id)
                 if source_snapshot is None or source_snapshot.get('status') != DocStatus.SUCCESS.value:
                     raise DocServiceError(
                         'E_STATE_CONFLICT',
@@ -1262,14 +1243,14 @@ class DocManager:
             try:
                 # enqueue a single DOC_ADD task covering all algos; ng dedup handled by _wait_and_decide_ng
                 task_id, snapshot = self._enqueue_task(
-                    doc_id, request.kb_id, algo_ids[0], TaskType.DOC_ADD,
+                    doc_id, request.kb_id, TaskType.DOC_ADD,
+                    algo_ids=algo_ids,
                     idempotency_key=request.idempotency_key,
                     file_path=file_path,
                     metadata=metadata,
-                    algo_ids=algo_ids,
                 )
             except Exception as exc:
-                snapshot = self._get_parse_snapshot(doc_id, request.kb_id, algo_ids[0]) or {}
+                snapshot = self._get_parse_snapshot(doc_id, request.kb_id) or {}
                 doc = self._get_doc(doc_id) or doc
                 task_id = snapshot.get('current_task_id')
                 error_code = snapshot.get('last_error_code') or type(exc).__name__
@@ -1367,7 +1348,8 @@ class DocManager:
             self._upsert_ng_status_pending(item['doc_id'], request.kb_id, pending_ng_ids,
                                            item['file_path'], force=True)
             task_id, _ = self._enqueue_task(
-                item['doc_id'], request.kb_id, algo_id, TaskType.DOC_REPARSE,
+                item['doc_id'], request.kb_id, TaskType.DOC_REPARSE,
+                algo_ids=[algo_id],
                 idempotency_key=request.idempotency_key,
                 file_path=item['file_path'],
                 metadata=item['metadata'],
@@ -1380,7 +1362,7 @@ class DocManager:
         # Returns (needs_delete_task, canceled_task_id); raises DocServiceError on conflict.
         needs_delete_task, canceled_task_id = False, None
         for algo_id in algo_ids:
-            snap = self._get_parse_snapshot(doc_id, kb_id, algo_id)
+            snap = self._get_parse_snapshot(doc_id, kb_id)
             if snap is None:
                 continue
             status = snap.get('status')
@@ -1434,9 +1416,9 @@ class DocManager:
 
             # submit a single delete task covering all algos
             task_id, snap = self._enqueue_task(
-                doc_id, request.kb_id, all_algo_ids[0], TaskType.DOC_DELETE,
-                idempotency_key=request.idempotency_key,
+                doc_id, request.kb_id, TaskType.DOC_DELETE,
                 algo_ids=all_algo_ids,
+                idempotency_key=request.idempotency_key,
             )
             items.append({
                 'doc_id': doc_id,
@@ -1468,11 +1450,11 @@ class DocManager:
                     allowed_path_doc_ids={item['doc_id']},
                 )
                 task_id, snapshot = self._enqueue_task(
-                    item['target_doc_id'], item['target_kb_id'], item['algo_ids'][0], TaskType.DOC_TRANSFER,
+                    item['target_doc_id'], item['target_kb_id'], TaskType.DOC_TRANSFER,
+                    algo_ids=item['algo_ids'],
                     idempotency_key=request.idempotency_key,
                     file_path=item['file_path'],
                     metadata=item['metadata'],
-                    algo_ids=item['algo_ids'],
                     parser_kb_id=item['source_kb_id'],
                     transfer_params=item['transfer_params'],
                     extra_message={
@@ -1488,7 +1470,7 @@ class DocManager:
                 primary_snapshot = snapshot
             except Exception as exc:
                 primary_snapshot = self._get_parse_snapshot(
-                    item['target_doc_id'], item['target_kb_id'], item['algo_ids'][0]
+                    item['target_doc_id'], item['target_kb_id'],
                 ) or {}
                 primary_task_id = primary_task_id or primary_snapshot.get('current_task_id')
                 error_code = primary_snapshot.get('last_error_code')
@@ -1529,7 +1511,8 @@ class DocManager:
             primary_task_id = None
             for algo_id in all_algo_ids:
                 task_id, _ = self._enqueue_task(
-                    item['doc_id'], request.kb_id, algo_id, TaskType.DOC_UPDATE_META,
+                    item['doc_id'], request.kb_id, TaskType.DOC_UPDATE_META,
+                    algo_ids=[algo_id],
                     idempotency_key=request.idempotency_key if primary_task_id is None else None,
                     file_path=item['file_path'],
                     metadata=item['metadata'],
@@ -1589,7 +1572,6 @@ class DocManager:
                 'task_type': payload['task_type'],
                 'doc_id': payload['doc_id'],
                 'kb_id': payload['kb_id'],
-                'algo_id': payload.get('algo_id'),  # may be None for new-style callbacks
             }
         return None
 
@@ -1602,9 +1584,8 @@ class DocManager:
                 return {'ack': True, 'ignored_reason': 'task_not_found'}
             doc_id = task_data['doc_id']
             kb_id = task_data['kb_id']
-            algo_id = task_data['algo_id']
             task_type = TaskType(task_data['task_type'])
-            snapshot = self._get_parse_snapshot(doc_id, kb_id, algo_id)
+            snapshot = self._get_parse_snapshot(doc_id, kb_id)
             if snapshot and snapshot.get('current_task_id') and snapshot['current_task_id'] != callback.task_id:
                 return {'ack': True, 'deduped': False, 'ignored_reason': 'stale_task_callback'}
             if task_data.get('status') == DocStatus.CANCELED.value and callback.status != DocStatus.CANCELED:
@@ -1623,7 +1604,6 @@ class DocManager:
                 self._upsert_parse_snapshot(
                     doc_id=doc_id,
                     kb_id=kb_id,
-                    algo_id=algo_id,
                     status=start_status,
                     **self._build_snapshot_update(
                         snapshot,
@@ -1675,7 +1655,6 @@ class DocManager:
             self._upsert_parse_snapshot(
                 doc_id=doc_id,
                 kb_id=kb_id,
-                algo_id=algo_id,
                 status=final_status,
                 **self._build_snapshot_update(
                     snapshot,
@@ -1691,33 +1670,24 @@ class DocManager:
             upload_status_handled = False
             unbind_algo = task_message.get('unbind_algo', False)
             if task_type == TaskType.DOC_DELETE and final_status == DocStatus.DELETED:
-                # Only purge kb_documents + ng_status when ALL algo delete tasks for this doc are done.
-                all_deleted = self._all_algo_snapshots_deleted(doc_id, kb_id)
-                if all_deleted:
-                    if cleanup_policy == 'purge':
-                        self._purge_deleted_kb_doc_data(kb_id, doc_id, remove_relation=True)
-                        upload_status_handled = True
-                    else:
-                        self._remove_kb_document(kb_id, doc_id)
-                        self._delete_ng_status(doc_id, kb_id)
+                if cleanup_policy == 'purge':
+                    self._purge_deleted_kb_doc_data(kb_id, doc_id, remove_relation=True)
+                    upload_status_handled = True
                 elif unbind_algo:
-                    # Not all algos deleted yet — only clean up ng_status rows for ngs
-                    # that are exclusive to the unbound algo (shared ngs must be preserved).
+                    # Unbind: only remove ng_status rows exclusive to this algo;
+                    # shared ngs must be preserved for remaining algos.
                     exclusive_ng_ids = task_message.get('exclusive_ng_ids') or []
                     self._delete_ng_status_for_groups(doc_id, kb_id, exclusive_ng_ids)
-                    # Remove the parse_state row for this algo so it no longer affects
-                    # _all_algo_snapshots_deleted checks for other algos.
-                    self._delete_parse_snapshot_for_algo(doc_id, kb_id, algo_id)
-                # If this was an unbind_algo task, check if all docs for this algo are now DELETED.
-                # When all_deleted is True, purge already cleaned up parse_state rows, so count=0.
-                # When all_deleted is False, we deleted this algo's parse_state above; count remaining.
-                if unbind_algo:
-                    if not all_deleted:
-                        remaining = self._count_non_deleted_snapshots_for_algo(kb_id, algo_id)
-                    else:
-                        remaining = 0
+                    # Delete the parse_state row so _count_non_deleted_docs_in_kb is accurate.
+                    self._delete_parse_snapshots(doc_id, kb_id)
+                    # Remove kb_algo binding when all docs for this algo are gone.
+                    remaining = self._count_non_deleted_docs_in_kb(kb_id)
+                    unbind_algo_id = task_message.get('unbind_algo_id', '')
                     if remaining == 0:
-                        self._remove_kb_algo_binding(kb_id, algo_id)
+                        self._remove_kb_algo_binding(kb_id, unbind_algo_id)
+                else:
+                    self._remove_kb_document(kb_id, doc_id)
+                    self._delete_ng_status(doc_id, kb_id)
             if not upload_status_handled:
                 self._apply_doc_upload_status(doc_id, task_type, final_status)
             if task_type == TaskType.DOC_DELETE and final_status == DocStatus.DELETED and cleanup_policy == 'purge':
@@ -1736,17 +1706,11 @@ class DocManager:
             Rel = self._db_manager.get_table_orm_class(KB_DOCUMENTS_TABLE_INFO['name'])
             State = self._db_manager.get_table_orm_class(PARSE_STATE_TABLE_INFO['name'])
 
-            rn_col = sqlalchemy.func.row_number().over(
-                partition_by=(State.doc_id, State.kb_id),
-                order_by=(State.updated_at.desc(), State.created_at.desc())).label('_rn')
-            ranked_sq = session.query(State, rn_col).subquery('ranked_snapshot')
-            latest_sq = session.query(ranked_sq).filter(ranked_sq.c._rn == 1).subquery('latest_snapshot')
-            SnapshotAlias = aliased(State, latest_sq)
             snapshot_join_cond = sqlalchemy.and_(
-                SnapshotAlias.doc_id == Doc.doc_id, SnapshotAlias.kb_id == Rel.kb_id)
+                State.doc_id == Doc.doc_id, State.kb_id == Rel.kb_id)
 
-            query = (session.query(Doc, Rel, SnapshotAlias).join(Rel, Doc.doc_id == Rel.doc_id)
-                     .outerjoin(SnapshotAlias, snapshot_join_cond))
+            query = (session.query(Doc, Rel, State).join(Rel, Doc.doc_id == Rel.doc_id)
+                     .outerjoin(State, snapshot_join_cond))
 
             if kb_id:
                 query = query.filter(Rel.kb_id == kb_id)
@@ -1756,7 +1720,7 @@ class DocManager:
             if not include_deleted_or_canceled:
                 query = query.filter(~Doc.upload_status.in_([DocStatus.DELETED.value, DocStatus.CANCELED.value]))
             if status:
-                query = query.filter(SnapshotAlias.status.in_(status))
+                query = query.filter(State.status.in_(status))
 
             query = query.order_by(Rel.updated_at.desc(), Doc.updated_at.desc())
             result = self._db_manager.paginate(query, page=page, page_size=page_size)
@@ -2091,8 +2055,8 @@ class DocManager:
         doc_ids = self._list_kb_doc_ids(kb_id)
         affected_doc_ids = [
             doc_id for doc_id in doc_ids
-            if self._get_parse_snapshot(doc_id, kb_id, algo_id) is not None
-            and self._get_parse_snapshot(doc_id, kb_id, algo_id).get('status') not in (
+            if self._get_parse_snapshot(doc_id, kb_id) is not None
+            and self._get_parse_snapshot(doc_id, kb_id).get('status') not in (
                 DocStatus.DELETED.value, DocStatus.DELETING.value
             )
         ]
@@ -2100,7 +2064,7 @@ class DocManager:
             return {'task_ids': [], 'affected_doc_ids': affected_doc_ids, 'dry_run': True}
         task_ids = []
         for doc_id in affected_doc_ids:
-            snapshot = self._get_parse_snapshot(doc_id, kb_id, algo_id)
+            snapshot = self._get_parse_snapshot(doc_id, kb_id)
             if snapshot is None or snapshot.get('status') in (DocStatus.DELETED.value, DocStatus.DELETING.value):
                 continue
             status = snapshot.get('status')
@@ -2120,8 +2084,10 @@ class DocManager:
                                 else {'task_id': snapshot['current_task_id']})
                     raise DocServiceError('E_STATE_CONFLICT', cancel_resp.msg, err_data)
             task_id, _ = self._enqueue_task(
-                doc_id, kb_id, algo_id, TaskType.DOC_DELETE,
-                extra_message={'unbind_algo': True, 'exclusive_ng_ids': exclusive_ng_ids},
+                doc_id, kb_id, TaskType.DOC_DELETE,
+                algo_ids=[algo_id],
+                extra_message={'unbind_algo': True, 'unbind_algo_id': algo_id,
+                               'exclusive_ng_ids': exclusive_ng_ids},
             )
             task_ids.append(task_id)
         # If no docs to clean up, remove the binding immediately
@@ -2149,7 +2115,8 @@ class DocManager:
                 continue
             if item['action'] == 'enqueue_delete':
                 task_id, _ = self._enqueue_task(
-                    item['doc_id'], kb_id, item['algo_id'], TaskType.DOC_DELETE, cleanup_policy='purge'
+                    item['doc_id'], kb_id, TaskType.DOC_DELETE,
+                    algo_ids=[item['algo_id']], cleanup_policy='purge',
                 )
                 task_ids.append(task_id)
                 continue
