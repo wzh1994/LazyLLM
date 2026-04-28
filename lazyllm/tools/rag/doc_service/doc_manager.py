@@ -907,13 +907,29 @@ class DocManager:
     def _resolve_ng_for_task(self, task_type: TaskType, algo_id: str,
                              algo_ids: List[str], ng_names: Optional[List[str]],
                              extra_message: Optional[Dict]) -> tuple:
-        '''Returns (resolved_ng_names, ng_ids_for_pending, exclusive_ng_ids).'''
+        '''Returns (resolved_ng_names, ng_ids_for_pending, exclusive_ng_ids).
+
+        resolved_ng_names: ng *names* sent to the parser service (None = parse all).
+        ng_ids_for_pending: ng *ids* (DB primary keys) written to the ng_status table.
+        Note: each node group has both a name (logical label, e.g. "CoarseChunk") and
+        an id (DB key).  The parser API uses names; the ng_status table uses ids.
+
+        When ng_names is already provided by the caller (e.g. reparse with ng_names),
+        it is passed through as-is.  We only call _algo_ids_to_ng_names when ng_names
+        is None and there are multiple algos, to derive the full merged ng list.
+        '''
         exclusive_ng_ids = (
             (extra_message or {}).get('exclusive_ng_ids') if task_type == TaskType.DOC_DELETE else None
         )
         resolved_ng_names: Optional[List[str]] = ng_names
         ng_ids_for_pending: List[str] = []
-        if len(algo_ids) > 1:
+        if ng_names is not None:
+            # Caller already knows which ng_names to use — trust it, don't re-derive.
+            # ng_ids_for_pending is already computed by _collect_reparse_ng_info and
+            # passed via _upsert_ng_status_pending before _enqueue_task is called.
+            pass
+        elif len(algo_ids) > 1:
+            # Multi-algo, no explicit ng_names: derive merged ng list from all algos.
             name_to_id = self._algo_ids_to_ng_names(algo_ids)
             resolved_ng_names = list(name_to_id.keys())
             ng_ids_for_pending = list(name_to_id.values())
@@ -1290,17 +1306,28 @@ class DocManager:
             algo_ids = request.algo_ids
             for aid in algo_ids:
                 self._validate_kb_algorithm(request.kb_id, aid)
-        elif request.ng_names is not None:
-            algo_ids = self._get_algos_for_ng_names(request.kb_id, request.ng_names)
-            if not algo_ids:
-                raise DocServiceError('E_INVALID_PARAM',
-                                      f'no algos found for ng_names {request.ng_names!r} in kb {request.kb_id!r}')
         else:
             algo_ids = self._get_kb_algorithms(request.kb_id)
-        pending_ng_ids, effective_ng_names = self._collect_reparse_ng_info(request, algo_ids)
-        if not pending_ng_ids:
-            LOG.info(f'[reparse] kb={request.kb_id!r}: all node groups are shared, nothing to reparse')
-            return []
+
+        if request.ng_names is not None:
+            # User specified ng_names directly — resolve to ng_ids for ng_status table.
+            # The parser receives ng_names as-is and routes internally; algo_ids are not
+            # used for routing here, only for resolving ng_ids.
+            pending_ng_ids = self._resolve_ng_ids_for_names(request.kb_id, request.ng_names, algo_ids)
+            if not pending_ng_ids:
+                raise DocServiceError(
+                    'E_INVALID_PARAM',
+                    f'none of the requested ng_names {request.ng_names!r} were found in kb {request.kb_id!r}',
+                )
+            effective_ng_names: Optional[List[str]] = list(request.ng_names)
+        else:
+            # Reparse all non-shared ngs across the resolved algo_ids.
+            pending_ng_ids = self._collect_non_shared_ng_ids(request.kb_id, algo_ids)
+            if not pending_ng_ids:
+                LOG.info(f'[reparse] kb={request.kb_id!r}: all node groups are shared, nothing to reparse')
+                return []
+            effective_ng_names = None
+
         prepared_items = self._prepare_reparse_items(request, algo_ids[0])
         task_ids = []
         for item in prepared_items:
@@ -1317,54 +1344,35 @@ class DocManager:
             task_ids.append(task_id)
         return task_ids
 
-    def _get_algos_for_ng_names(self, kb_id: str, ng_names: List[str]) -> List[str]:
-        '''Return algo_ids bound to kb_id that contain at least one of the given ng_names.
-        For each ng_name, only the first matching algo is selected to avoid duplicate reparse tasks
-        for shared node groups.'''
-        target_names = set(ng_names)
-        all_algo_ids = self._get_kb_algorithms(kb_id)
-        # Build ng_name → first_algo mapping
-        ng_name_to_algo: Dict[str, str] = {}
-        for algo_id in all_algo_ids:
-            resp = self._parser_client.get_algorithm_groups(algo_id)
-            if resp and resp.code == 200 and resp.data:
-                groups = resp.data if isinstance(resp.data, list) else []
-                for g in groups:
-                    name = g.get('name')
-                    if name and name in target_names and name not in ng_name_to_algo:
-                        ng_name_to_algo[name] = algo_id
-        # Return deduplicated list of algo_ids (preserving order)
+    def _resolve_ng_ids_for_names(self, kb_id: str, ng_names: List[str],
+                                  algo_ids: List[str]) -> List[str]:
+        '''Resolve ng_names to their DB ids by querying the given algo_ids.
+        Returns a deduped list of ng_ids for the requested names.'''
         seen: set = set()
-        result = []
-        for algo_id in ng_name_to_algo.values():
-            if algo_id not in seen:
-                seen.add(algo_id)
-                result.append(algo_id)
+        result: List[str] = []
+        for algo_id in algo_ids:
+            resp = self._parser_client.get_algorithm_groups(algo_id)
+            groups = (resp.data if resp and resp.code == 200 and isinstance(resp.data, list) else [])
+            name_to_id = {g['name']: g['id'] for g in groups if g.get('name') and g.get('id')}
+            for name in ng_names:
+                ng_id = name_to_id.get(name)
+                if ng_id and ng_id not in seen:
+                    seen.add(ng_id)
+                    result.append(ng_id)
         return result
 
-    def _collect_reparse_ng_info(self, request: ReparseRequest, algo_ids: List[str]) -> tuple:
-        all_pending_ng_ids: List[str] = []
-        all_effective_ng_names: Optional[List[str]] = [] if request.ng_names else None
-        seen_ng_ids: set = set()
+    def _collect_non_shared_ng_ids(self, kb_id: str, algo_ids: List[str]) -> List[str]:
+        '''Collect ng_ids that are exclusive to their algo (not shared with other algos in the kb).'''
+        seen: set = set()
+        result: List[str] = []
         for algo_id in algo_ids:
-            if request.ng_names:
-                resp = self._parser_client.get_algorithm_groups(algo_id)
-                groups = (resp.data if resp and resp.code == 200 and isinstance(resp.data, list) else [])
-                name_to_id = {g['name']: g['id'] for g in groups if g.get('name') and g.get('id')}
-                for name in request.ng_names:
-                    ng_id = name_to_id.get(name)
-                    if ng_id and ng_id not in seen_ng_ids:
-                        seen_ng_ids.add(ng_id)
-                        all_pending_ng_ids.append(ng_id)
-                        all_effective_ng_names.append(name)
-            else:
-                all_ng_ids = self._get_algo_node_group_ids(algo_id)
-                shared_ng_ids = self._get_shared_ng_ids(request.kb_id, algo_id, all_ng_ids)
-                for ng_id in all_ng_ids:
-                    if ng_id not in shared_ng_ids and ng_id not in seen_ng_ids:
-                        seen_ng_ids.add(ng_id)
-                        all_pending_ng_ids.append(ng_id)
-        return all_pending_ng_ids, all_effective_ng_names
+            all_ng_ids = self._get_algo_node_group_ids(algo_id)
+            shared_ng_ids = self._get_shared_ng_ids(kb_id, algo_id, all_ng_ids)
+            for ng_id in all_ng_ids:
+                if ng_id not in shared_ng_ids and ng_id not in seen:
+                    seen.add(ng_id)
+                    result.append(ng_id)
+        return result
 
     def _check_algos_for_delete(self, doc_id: str, kb_id: str, algo_ids: List[str]):
         # Returns (needs_delete_task, canceled_task_id); raises DocServiceError on conflict.
