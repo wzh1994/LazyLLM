@@ -25,7 +25,6 @@ from .base import (
     DocServiceError,
     DocStatus,
     DOCUMENTS_TABLE_INFO,
-    KbBatchQueryRequest,
     KbCreateRequest,
     KbDeleteBatchRequest,
     KbUpdateRequest,
@@ -1050,11 +1049,6 @@ class DocServer(ModuleBase):
         def update_kb(self, kb_id: str, request: KbUpdateRequest):
             return self.update_kb_by_id(kb_id, request)
 
-        @app.post('/v1/kbs/batch')
-        def batch_get_kbs(self, request: KbBatchQueryRequest):
-            self._lazy_init()
-            return self._run(lambda: self._manager.batch_get_kbs(request.kb_ids))
-
         @app.delete('/v1/kbs/{kb_id}/algos/{algo_id}')
         def unbind_algo(self, kb_id: str, algo_id: str, dry_run: bool = False):
             self._lazy_init()
@@ -1311,9 +1305,6 @@ class DocServer(ModuleBase):
 
     def update_kb(self, kb_id: str, request: KbUpdateRequest):
         return self._dispatch('update_kb_by_id', kb_id, request)
-
-    def batch_get_kbs(self, kb_ids: List[str]):
-        return self._dispatch('batch_get_kbs', KbBatchQueryRequest(kb_ids=kb_ids))
 
     def delete_kb(self, kb_id: str):
         return self._dispatch('delete_kb', kb_id)

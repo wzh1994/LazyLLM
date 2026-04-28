@@ -399,10 +399,6 @@ _add_bilingual_docs({
         '校验批量任务查询请求中的 ``task_ids``。',
         'Validate ``task_ids`` in a batch task query request.'
     ),
-    'rag.doc_service.base.KbBatchQueryRequest.validate_kb_ids': (
-        '校验批量知识库查询请求中的 ``kb_ids``。',
-        'Validate ``kb_ids`` in a batch knowledge-base query request.'
-    ),
     'rag.parsing_service.base.AddDocRequest.normalize_deprecated_fields': (
         '将旧版 add-doc 字段归一化到当前请求格式。',
         'Normalize deprecated add-doc fields into the current request format.'
@@ -528,10 +524,6 @@ _add_bilingual_docs({
             '获取单个知识库的信息。',
             'Get information for one knowledge base.'
         ),
-        'batch_get_kbs': (
-            '批量获取多个知识库的信息。',
-            'Fetch information for multiple knowledge bases in one batch.'
-        ),
         'create_kb': (
             '创建新的知识库。',
             'Create a new knowledge base.'
@@ -656,10 +648,6 @@ _add_bilingual_docs({
         'update_kb': (
             '更新知识库的元信息。',
             'Update knowledge-base metadata.'
-        ),
-        'batch_get_kbs': (
-            '批量获取多个知识库的信息。',
-            'Fetch information for multiple knowledge bases in one batch.'
         ),
         'unbind_algo': (
             '从知识库解绑一个算法，并异步清理该算法独有节点组的解析数据；与其他算法共享的节点组数据保留。',

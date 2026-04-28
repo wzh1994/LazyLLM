@@ -190,7 +190,7 @@
     exclude-members:
 
 ::: lazyllm.tools.rag.doc_service.DocServer
-    members: [upload, add, reparse, delete, transfer, patch_metadata, list_docs, get_doc, list_tasks, get_task, cancel_task, list_kbs, get_kb, list_chunks, list_algorithms, get_algorithm_info, create_kb, update_kb, batch_get_kbs, delete_kb, delete_kbs]
+    members: [upload, add, reparse, delete, transfer, patch_metadata, list_docs, get_doc, list_tasks, get_task, cancel_task, list_kbs, get_kb, list_chunks, list_algorithms, get_algorithm_info, create_kb, update_kb, delete_kb, delete_kbs]
     exclude-members:
 
 ::: lazyllm.tools.rag.doc_service.base.AddFileItem

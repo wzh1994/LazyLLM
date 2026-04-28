@@ -255,16 +255,6 @@ KbCreateRequest = KbRequest
 KbUpdateRequest = KbRequest
 
 
-class KbBatchQueryRequest(BaseModel):
-    kb_ids: List[str]
-
-    @model_validator(mode='after')
-    def validate_kb_ids(self):
-        if not self.kb_ids:
-            raise ValueError('kb_ids is required')
-        return self
-
-
 IDEMPOTENCY_RECORDS_TABLE_INFO = {
     'name': 'lazyllm_idempotency_records',
     'comment': 'Idempotency replay records',
