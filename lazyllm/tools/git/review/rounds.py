@@ -3019,7 +3019,13 @@ def _compress_existing_comments(llm: Any, comments: List[Dict[str, Any]]) -> Lis
 
 def _compress_new_issues(llm: Any, issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     def body_fn(c: Dict[str, Any]) -> str:
-        return (c.get('problem') or '') + ' ' + (c.get('suggestion') or '')
+        problem = c.get('problem') or ''
+        suggestion = c.get('suggestion') or ''
+        if isinstance(problem, list):
+            problem = ' '.join(str(x) for x in problem)
+        if isinstance(suggestion, list):
+            suggestion = ' '.join(str(x) for x in suggestion)
+        return problem + ' ' + suggestion
 
     def extra_fn(c: Dict[str, Any], summary: Optional[str]) -> Dict[str, Any]:
         return {
