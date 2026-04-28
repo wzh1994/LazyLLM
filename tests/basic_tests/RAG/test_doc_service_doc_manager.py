@@ -1748,3 +1748,242 @@ def test_multi_algo_scenario10_reparse_all_shared_ngs_no_task(manager_harness):
     assert task_ids == [], 'no reparse task should be submitted when all ngs are shared'
     assert len(manager_harness.add_doc_calls) == add_calls_before, \
         'no new add_doc call should be made'
+
+
+# ======================================================================
+# PR #1098 review-fix regression tests
+# ======================================================================
+
+# ---------------------------------------------------------------------------
+# C2: _get_kb_algorithms merged — single-str guarantees non-empty
+# ---------------------------------------------------------------------------
+
+def test_get_kb_algorithms_single_str_raises_when_no_binding(manager_harness):
+    '''_get_kb_algorithms(str) must raise E_STATE_CONFLICT when kb has no algo binding.'''
+    mgr = manager_harness.manager
+    # Create a kb then manually remove its algo binding
+    mgr.create_kb('kb_no_binding', algo_id='__default__')
+    KbAlgo = mgr._db_manager.get_table_orm_class('lazyllm_kb_algorithm')
+    with mgr._db_manager.get_session() as session:
+        session.query(KbAlgo).filter(KbAlgo.kb_id == 'kb_no_binding').delete()
+
+    with pytest.raises(DocServiceError) as exc_info:
+        mgr._get_kb_algorithms('kb_no_binding')
+    assert exc_info.value.biz_code == 'E_STATE_CONFLICT'
+
+
+def test_get_kb_algorithms_list_returns_dict_without_raising(manager_harness):
+    '''_get_kb_algorithms(List[str]) must return a dict and never raise for missing kbs.'''
+    mgr = manager_harness.manager
+    mgr.create_kb('kb_a', algo_id='__default__')
+    result = mgr._get_kb_algorithms(['kb_a', 'kb_missing'])
+    assert isinstance(result, dict)
+    assert 'kb_a' in result
+    assert len(result['kb_a']) > 0
+    assert result.get('kb_missing', []) == []
+
+
+def test_get_kb_algorithms_single_str_returns_list(manager_harness):
+    '''_get_kb_algorithms(str) must return a non-empty List[str].'''
+    mgr = manager_harness.manager
+    mgr.create_kb('kb_single', algo_id='__default__')
+    result = mgr._get_kb_algorithms('kb_single')
+    assert isinstance(result, list)
+    assert len(result) > 0
+
+
+# ---------------------------------------------------------------------------
+# B2: task record no longer stores algo_id; task_message stores algo_ids list
+# ---------------------------------------------------------------------------
+
+def test_task_record_has_no_algo_id_field(manager_harness):
+    '''Task records must not have an algo_id column; algo_ids must be in task_message.'''
+    mgr = manager_harness.manager
+    mgr.create_kb('kb_task_b2', algo_id='__default__')
+    fp = manager_harness.make_file('b2.txt', 'content')
+    items = mgr.upload(UploadRequest(
+        kb_id='kb_task_b2',
+        items=[AddFileItem(file_path=fp, doc_id='doc_b2')],
+    ))
+    task_id = items[0]['task_id']
+
+    task = mgr._get_task_record(task_id)
+    assert task is not None
+    # algo_id must NOT be a top-level field on the task record
+    assert 'algo_id' not in task, 'algo_id should have been removed from task record'
+    # algo_ids must be stored in task_message
+    msg = task.get('message') or {}
+    assert 'algo_ids' in msg, 'algo_ids must be stored in task_message'
+    assert isinstance(msg['algo_ids'], list)
+    assert len(msg['algo_ids']) > 0
+
+
+# ---------------------------------------------------------------------------
+# B1: unbind_algo fetches each snapshot exactly once
+# ---------------------------------------------------------------------------
+
+def test_unbind_algo_snapshot_fetched_once_in_filter_phase(manager_harness):
+    '''Before the fix, the affected_doc_ids list comprehension called _get_parse_snapshot
+    twice per doc (once for "is not None" and once for ".get(status)").
+    After the fix, a pre-built snapshots dict is used so the filter phase calls it
+    exactly once per doc.  We verify this by counting calls that happen *before*
+    _enqueue_task is invoked (i.e. before any parser task is submitted).
+    '''
+    mgr = manager_harness.manager
+    _patch_multi_algo(manager_harness)
+    mgr.create_kb('kb_b1', algo_id='algo1')
+    mgr.update_kb('kb_b1', algo_id='algo2')
+
+    # Upload 3 docs so the list-comprehension savings are visible
+    doc_ids = ['doc_b1_a', 'doc_b1_b', 'doc_b1_c']
+    for doc_id in doc_ids:
+        fp = manager_harness.make_file(f'{doc_id}.txt', 'content')
+        items = mgr.upload(UploadRequest(
+            kb_id='kb_b1',
+            items=[AddFileItem(file_path=fp, doc_id=doc_id)],
+        ))
+        manager_harness.finish_task(items[0]['task_id'])
+
+    # Count calls that happen before _enqueue_task is first called
+    filter_phase_calls = []
+    enqueue_called = [False]
+    original_snapshot = mgr._get_parse_snapshot
+    original_enqueue = mgr._enqueue_task
+
+    def tracking_snapshot(doc_id, kb_id):
+        if not enqueue_called[0]:
+            filter_phase_calls.append(doc_id)
+        return original_snapshot(doc_id, kb_id)
+
+    def tracking_enqueue(*args, **kwargs):
+        enqueue_called[0] = True
+        return original_enqueue(*args, **kwargs)
+
+    mgr._get_parse_snapshot = tracking_snapshot
+    mgr._enqueue_task = tracking_enqueue
+    mgr.unbind_algo('kb_b1', 'algo1')
+
+    # The filter phase (building snapshots dict + affected_doc_ids) should call
+    # _get_parse_snapshot exactly once per doc — not twice as before the fix.
+    from collections import Counter
+    counts = Counter(filter_phase_calls)
+    for doc_id in doc_ids:
+        assert counts[doc_id] == 1, (
+            f'doc {doc_id} snapshot fetched {counts[doc_id]} times in filter phase; '
+            f'expected exactly 1 (before fix it was 2 due to double-call in list comprehension)'
+        )
+
+
+# ---------------------------------------------------------------------------
+# B3: DOC_TRANSFER sets ng_status to PENDING
+# ---------------------------------------------------------------------------
+
+def test_transfer_sets_ng_status_pending(manager_harness):
+    '''DOC_TRANSFER must set ng_status rows to PENDING for the target doc.'''
+    mgr = manager_harness.manager
+    _patch_multi_algo(manager_harness)
+    mgr.create_kb('kb_src_b3', algo_id='algo1')
+    mgr.create_kb('kb_tgt_b3', algo_id='algo1')
+
+    fp = manager_harness.make_file('b3_src.txt', 'content')
+    items = mgr.upload(UploadRequest(
+        kb_id='kb_src_b3',
+        items=[AddFileItem(file_path=fp, doc_id='doc_src_b3')],
+    ))
+    manager_harness.finish_task(items[0]['task_id'])
+    manager_harness.set_ng_status('kb_src_b3', 'doc_src_b3', ['ng1', 'ng2', 'ng3'], 'SUCCESS')
+
+    from lazyllm.tools.rag.doc_service.base import TransferItem, TransferRequest
+    mgr.transfer(TransferRequest(items=[TransferItem(
+        doc_id='doc_src_b3', source_kb_id='kb_src_b3',
+        target_doc_id='doc_tgt_b3', target_kb_id='kb_tgt_b3',
+        mode='copy',
+    )]))
+
+    # ng_status rows for the target doc must be PENDING
+    statuses = _ng_statuses(manager_harness, 'kb_tgt_b3', 'doc_tgt_b3')
+    assert len(statuses) > 0, 'ng_status rows must be created for target doc on transfer'
+    for ng_id, status in statuses.items():
+        assert status == 'PENDING', f'ng {ng_id} status is {status!r}, expected PENDING'
+
+
+# ---------------------------------------------------------------------------
+# B5: unbind_algo_id empty string must not crash
+# ---------------------------------------------------------------------------
+
+def test_unbind_algo_empty_unbind_algo_id_does_not_crash(manager_harness):
+    '''on_task_callback with unbind_algo=True but empty unbind_algo_id must not crash.'''
+    mgr = manager_harness.manager
+    _patch_multi_algo(manager_harness)
+    mgr.create_kb('kb_b5', algo_id='algo1')
+    mgr.update_kb('kb_b5', algo_id='algo2')
+
+    fp = manager_harness.make_file('b5.txt', 'content')
+    items = mgr.upload(UploadRequest(
+        kb_id='kb_b5',
+        items=[AddFileItem(file_path=fp, doc_id='doc_b5')],
+    ))
+    task_id = items[0]['task_id']
+
+    # Manually inject a task_message with unbind_algo=True but empty unbind_algo_id
+    Task = mgr._db_manager.get_table_orm_class('lazyllm_doc_service_tasks')
+    import json as _json
+    with mgr._db_manager.get_session() as session:
+        row = session.query(Task).filter(Task.task_id == task_id).first()
+        msg = _json.loads(row.message) if row.message else {}
+        msg['unbind_algo'] = True
+        msg['unbind_algo_id'] = ''  # intentionally empty
+        msg['exclusive_ng_ids'] = []
+        row.message = _json.dumps(msg)
+
+    # Must not raise even with empty unbind_algo_id
+    resp = manager_harness.finish_task(task_id)
+    assert resp.get('ack') is True
+
+
+# ---------------------------------------------------------------------------
+# B7: ReparseRequest rejects empty algo_ids / ng_names lists
+# ---------------------------------------------------------------------------
+
+def test_reparse_request_rejects_empty_algo_ids():
+    '''ReparseRequest must raise ValueError when algo_ids is an empty list.'''
+    with pytest.raises(ValueError, match='algo_ids must not be an empty list'):
+        ReparseRequest(doc_ids=['d1'], kb_id='kb1', algo_ids=[])
+
+
+def test_reparse_request_rejects_empty_ng_names():
+    '''ReparseRequest must raise ValueError when ng_names is an empty list.'''
+    with pytest.raises(ValueError, match='ng_names must not be an empty list'):
+        ReparseRequest(doc_ids=['d1'], kb_id='kb1', ng_names=[])
+
+
+def test_reparse_request_accepts_none_algo_ids():
+    '''ReparseRequest must accept algo_ids=None (reparse all algos).'''
+    req = ReparseRequest(doc_ids=['d1'], kb_id='kb1', algo_ids=None)
+    assert req.algo_ids is None
+
+
+# ---------------------------------------------------------------------------
+# C3: _get_algo_node_group_ids caches results per algo_id
+# ---------------------------------------------------------------------------
+
+def test_get_algo_node_group_ids_caches_result(manager_harness):
+    '''_get_algo_node_group_ids must call the parser only once per algo_id.'''
+    mgr = manager_harness.manager
+    call_count = [0]
+    original = mgr._parser_client.get_algorithm_groups
+
+    def counting_get_algorithm_groups(algo_id):
+        call_count[0] += 1
+        return original(algo_id)
+
+    mgr._parser_client.get_algorithm_groups = counting_get_algorithm_groups
+    # Clear any existing cache
+    mgr._algo_ng_cache.clear()
+
+    mgr._get_algo_node_group_ids('__default__')
+    mgr._get_algo_node_group_ids('__default__')
+    mgr._get_algo_node_group_ids('__default__')
+
+    assert call_count[0] == 1, \
+        f'parser called {call_count[0]} times, expected 1 (cache should prevent repeated calls)'

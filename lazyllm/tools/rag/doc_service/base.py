@@ -108,19 +108,6 @@ AddRequest = DocItemsRequest
 UploadRequest = DocItemsRequest
 
 
-class _DocMutationRequest(BaseModel):
-    doc_ids: List[str]
-    kb_id: str = '__default__'
-    algo_id: str = '__default__'
-    idempotency_key: Optional[str] = None
-
-    @model_validator(mode='after')
-    def validate_doc_ids(self):
-        if not self.doc_ids:
-            raise ValueError('doc_ids is required')
-        return self
-
-
 class ReparseRequest(BaseModel):
     doc_ids: List[str]
     kb_id: str = '__default__'
@@ -133,6 +120,10 @@ class ReparseRequest(BaseModel):
     def validate_fields(self):
         if not self.doc_ids:
             raise ValueError('doc_ids is required')
+        if self.algo_ids is not None and len(self.algo_ids) == 0:
+            raise ValueError('algo_ids must not be an empty list; omit it to reparse all algos')
+        if self.ng_names is not None and len(self.ng_names) == 0:
+            raise ValueError('ng_names must not be an empty list; omit it to reparse all node groups')
         if self.algo_ids is not None and self.ng_names is not None:
             raise ValueError('algo_ids and ng_names are mutually exclusive; provide at most one.')
         return self
@@ -317,7 +308,6 @@ DOC_SERVICE_TASKS_TABLE_INFO = {
         {'name': 'task_type', 'data_type': 'string', 'nullable': False, 'comment': 'Task type'},
         {'name': 'doc_id', 'data_type': 'string', 'nullable': False, 'comment': 'Document ID'},
         {'name': 'kb_id', 'data_type': 'string', 'nullable': False, 'comment': 'Knowledge base ID'},
-        {'name': 'algo_id', 'data_type': 'string', 'nullable': False, 'comment': 'Algorithm ID'},
         {'name': 'status', 'data_type': 'string', 'nullable': False, 'comment': 'Current task status'},
         {'name': 'message', 'data_type': 'text', 'nullable': True, 'comment': 'Task payload in JSON string'},
         {'name': 'error_code', 'data_type': 'string', 'nullable': True, 'comment': 'Error code'},

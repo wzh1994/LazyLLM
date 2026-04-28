@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import json
 import os
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 from uuid import uuid4
 
 import sqlalchemy
@@ -58,6 +58,7 @@ class DocManager:
             raise RuntimeError(f'parser service is unavailable: {parser_url}') from exc
         self._cleanup_idempotency_records()
         self._callback_url = callback_url
+        self._algo_ng_cache: Dict[str, List[str]] = {}
 
     def set_callback_url(self, callback_url: str):
         self._callback_url = callback_url
@@ -108,7 +109,7 @@ class DocManager:
             'CREATE INDEX IF NOT EXISTS idx_doc_service_task_status '
             'ON lazyllm_doc_service_tasks(status, updated_at)',
             'CREATE INDEX IF NOT EXISTS idx_doc_service_task_doc '
-            'ON lazyllm_doc_service_tasks(doc_id, kb_id, algo_id)',
+            'ON lazyllm_doc_service_tasks(doc_id, kb_id)',
             'CREATE UNIQUE INDEX IF NOT EXISTS uq_ng_status_key '
             'ON lazyllm_doc_node_group_status(doc_id, kb_id, node_group_id)',
             'CREATE INDEX IF NOT EXISTS idx_ng_status_kb_ng '
@@ -195,12 +196,24 @@ class DocManager:
             row = session.query(Kb).filter(Kb.kb_id == kb_id).first()
             return _orm_to_dict(row) if row else None
 
-    def _get_kb_algorithms(self, kb_id: str) -> List[str]:
-        '''Return all algo_ids bound to this kb.'''
+    def _get_kb_algorithms(self, kb_ids: Union[str, List[str]]) -> Union[List[str], Dict[str, List[str]]]:
+        single = isinstance(kb_ids, str)
+        ids = [kb_ids] if single else list(kb_ids)
+        if not ids:
+            raise DocServiceError('E_INVALID_PARAM', 'kb_ids must not be empty')
         with self._db_manager.get_session() as session:
             Rel = self._db_manager.get_table_orm_class(KB_ALGORITHM_TABLE_INFO['name'])
-            rows = session.query(Rel).filter(Rel.kb_id == kb_id).all()
-            return [row.algo_id for row in rows]
+            rows = session.query(Rel).filter(Rel.kb_id.in_(ids)).all()
+        result: Dict[str, List[str]] = {kb_id: [] for kb_id in ids}
+        for row in rows:
+            result[row.kb_id].append(row.algo_id)
+        if single:
+            algo_ids = result[kb_ids]
+            if not algo_ids:
+                raise DocServiceError('E_STATE_CONFLICT', f'kb has no algorithm binding: {kb_ids}',
+                                      {'kb_id': kb_ids})
+            return algo_ids
+        return result
 
     @staticmethod
     def _build_kb_data(kb_row, algo_ids=None):
@@ -239,8 +252,6 @@ class DocManager:
         if kb.get('status') != KBStatus.ACTIVE.value:
             raise DocServiceError('E_STATE_CONFLICT', f'kb is not active: {kb_id}', {'kb_id': kb_id})
         algo_ids = self._get_kb_algorithms(kb_id)
-        if not algo_ids:
-            raise DocServiceError('E_STATE_CONFLICT', f'kb has no algorithm binding: {kb_id}', {'kb_id': kb_id})
         if algo_id not in algo_ids:
             raise DocServiceError(
                 'E_INVALID_PARAM', f'algo {algo_id} is not bound to kb {kb_id}',
@@ -397,7 +408,7 @@ class DocManager:
                 Record.task_id == task_id,
             ).delete()
 
-    def _create_task_record(self, task_id: str, task_type: TaskType, doc_id: str, kb_id: str, algo_id: str,
+    def _create_task_record(self, task_id: str, task_type: TaskType, doc_id: str, kb_id: str,
                             status: DocStatus, message: Optional[Dict[str, Any]] = None):
         now = datetime.now()
         with self._db_manager.get_session() as session:
@@ -407,7 +418,6 @@ class DocManager:
                 task_type=task_type.value,
                 doc_id=doc_id,
                 kb_id=kb_id,
-                algo_id=algo_id,
                 status=status.value,
                 message=to_json(message),
                 error_code=None,
@@ -613,11 +623,13 @@ class DocManager:
                     ))
 
     def _get_algo_node_group_ids(self, algo_id: str) -> List[str]:
+        if algo_id in self._algo_ng_cache:
+            return self._algo_ng_cache[algo_id]
         try:
             resp = self._parser_client.get_algorithm_groups(algo_id)
             if resp and resp.code == 200 and isinstance(resp.data, list):
-                result = [g['id'] for g in resp.data if g.get('id')]
-                if result:
+                if (result := [g['id'] for g in resp.data if g.get('id')]):
+                    self._algo_ng_cache[algo_id] = result
                     return result
         except Exception as e:
             raise RuntimeError(f'[DocManager] Failed to get node_group_ids for algo {algo_id}: {e}') from e
@@ -651,9 +663,6 @@ class DocManager:
             other_ngs = set(self._get_algo_node_group_ids(other_algo_id))
             shared |= candidate_set & other_ngs
         return shared
-
-    def _get_latest_parse_snapshot(self, doc_id: str, kb_id: str):
-        return self._get_parse_snapshot(doc_id, kb_id)
 
     def _delete_parse_snapshots(self, doc_id: str, kb_id: str, session=None):
         with self._db_manager.get_session(session) as sess:
@@ -755,7 +764,7 @@ class DocManager:
         items = []
         for doc_id in self._list_kb_doc_ids(kb_id):
             snapshot = (
-                self._get_latest_parse_snapshot(doc_id, kb_id)
+                self._get_parse_snapshot(doc_id, kb_id)
             )
             if snapshot is None or snapshot.get('status') == DocStatus.DELETED.value:
                 items.append({'action': 'purge_local', 'doc_id': doc_id})
@@ -957,6 +966,7 @@ class DocManager:
         task_message = {
             'doc_id': doc_id,
             'kb_id': kb_id,
+            'algo_ids': algo_ids,
             'file_path': file_path,
             'metadata': metadata,
         }
@@ -967,7 +977,7 @@ class DocManager:
         if transfer_params:
             task_message['transfer_params'] = transfer_params
         task_status = DocStatus.DELETING if task_type == TaskType.DOC_DELETE else DocStatus.WAITING
-        self._create_task_record(task_id, task_type, doc_id, kb_id, algo_id, task_status, message=task_message)
+        self._create_task_record(task_id, task_type, doc_id, kb_id, task_status, message=task_message)
         parse_status = DocStatus.DELETING if task_type == TaskType.DOC_DELETE else DocStatus.WAITING
         self._upsert_parse_snapshot(
             doc_id=doc_id,
@@ -991,6 +1001,8 @@ class DocManager:
             # so that on_task_callback can always find the status rows even if submission fails.
             if task_type == TaskType.DOC_ADD:
                 self._upsert_ng_status_pending(doc_id, kb_id, ng_ids_for_pending, file_path)
+            elif task_type == TaskType.DOC_TRANSFER:
+                self._upsert_ng_status_pending(doc_id, kb_id, ng_ids_for_pending, file_path, force=True)
             self._create_parser_task(
                 task_id, parser_doc_id or doc_id, kb_id, algo_id, task_type,
                 ng_names=resolved_ng_names,
@@ -1087,7 +1099,7 @@ class DocManager:
         prepared_items = []
         for doc_id in request.doc_ids:
             doc = self._get_doc(doc_id)
-            snapshot = self._get_latest_parse_snapshot(doc_id, request.kb_id)
+            snapshot = self._get_parse_snapshot(doc_id, request.kb_id)
             if doc is None or not self._has_kb_document(request.kb_id, doc_id):
                 if snapshot is not None and snapshot.get('status') in (
                     DocStatus.DELETING.value,
@@ -1216,11 +1228,6 @@ class DocManager:
     def upload(self, request: UploadRequest) -> List[Dict[str, Any]]:
         # auto-resolve: use all algos bound to this kb
         algo_ids = self._get_kb_algorithms(request.kb_id)
-        if not algo_ids:
-            raise DocServiceError(
-                'E_STATE_CONFLICT', f'kb has no algorithm binding: {request.kb_id}',
-                {'kb_id': request.kb_id},
-            )
         prepared_items = self._prepare_upload_items(request, algo_ids)
         source_type = request.source_type or SourceType.API
         items: List[Dict[str, Any]] = []
@@ -1279,24 +1286,35 @@ class DocManager:
 
     def reparse(self, request: ReparseRequest) -> List[str]:
         self._validate_unique_doc_ids(request.doc_ids, field_name='doc_id')
-        # Build the list of algo_ids to process.
         if request.algo_ids is not None:
             algo_ids = request.algo_ids
             for aid in algo_ids:
                 self._validate_kb_algorithm(request.kb_id, aid)
         elif request.ng_names is not None:
-            # Resolve ng_names → ng_ids, then find which algos contain those ngs
             algo_ids = self._get_algos_for_ng_names(request.kb_id, request.ng_names)
             if not algo_ids:
                 raise DocServiceError('E_INVALID_PARAM',
                                       f'no algos found for ng_names {request.ng_names!r} in kb {request.kb_id!r}')
         else:
             algo_ids = self._get_kb_algorithms(request.kb_id)
-            if not algo_ids:
-                raise DocServiceError('E_STATE_CONFLICT', f'kb has no algorithm binding: {request.kb_id}')
+        pending_ng_ids, effective_ng_names = self._collect_reparse_ng_info(request, algo_ids)
+        if not pending_ng_ids:
+            LOG.info(f'[reparse] kb={request.kb_id!r}: all node groups are shared, nothing to reparse')
+            return []
+        prepared_items = self._prepare_reparse_items(request, algo_ids[0])
         task_ids = []
-        for algo_id in algo_ids:
-            task_ids.extend(self._reparse_for_algo(request, algo_id))
+        for item in prepared_items:
+            self._upsert_ng_status_pending(item['doc_id'], request.kb_id, pending_ng_ids,
+                                           item['file_path'], force=True)
+            task_id, _ = self._enqueue_task(
+                item['doc_id'], request.kb_id, TaskType.DOC_REPARSE,
+                algo_ids=algo_ids,
+                idempotency_key=request.idempotency_key,
+                file_path=item['file_path'],
+                metadata=item['metadata'],
+                ng_names=effective_ng_names,
+            )
+            task_ids.append(task_id)
         return task_ids
 
     def _get_algos_for_ng_names(self, kb_id: str, ng_names: List[str]) -> List[str]:
@@ -1324,39 +1342,29 @@ class DocManager:
                 result.append(algo_id)
         return result
 
-    def _reparse_for_algo(self, request: ReparseRequest, algo_id: str) -> List[str]:
-        prepared_items = self._prepare_reparse_items(request, algo_id)
-        all_ng_ids = self._get_algo_node_group_ids(algo_id)
-        if request.ng_names:
-            # Filter to only ng_names that belong to this algo
-            resp = self._parser_client.get_algorithm_groups(algo_id)
-            groups = (resp.data if resp and resp.code == 200 and isinstance(resp.data, list) else [])
-            algo_ng_names = {g['name'] for g in groups if g.get('name') and g.get('id') in all_ng_ids}
-            effective_ng_names = [n for n in request.ng_names if n in algo_ng_names]
-            # Also resolve ng_ids for _upsert_ng_status_pending
-            name_to_id = {g['name']: g['id'] for g in groups if g.get('name') and g.get('id')}
-            pending_ng_ids = [name_to_id[n] for n in effective_ng_names if n in name_to_id]
-        else:
-            shared_ng_ids = self._get_shared_ng_ids(request.kb_id, algo_id, all_ng_ids)
-            pending_ng_ids = [ng for ng in all_ng_ids if ng not in shared_ng_ids]
-            effective_ng_names = None  # None means all non-shared ngs
-        if not pending_ng_ids:
-            LOG.info(f'[reparse] algo={algo_id!r} kb={request.kb_id!r}: all node groups are shared, nothing to reparse')
-            return []
-        task_ids = []
-        for item in prepared_items:
-            self._upsert_ng_status_pending(item['doc_id'], request.kb_id, pending_ng_ids,
-                                           item['file_path'], force=True)
-            task_id, _ = self._enqueue_task(
-                item['doc_id'], request.kb_id, TaskType.DOC_REPARSE,
-                algo_ids=[algo_id],
-                idempotency_key=request.idempotency_key,
-                file_path=item['file_path'],
-                metadata=item['metadata'],
-                ng_names=effective_ng_names,
-            )
-            task_ids.append(task_id)
-        return task_ids
+    def _collect_reparse_ng_info(self, request: ReparseRequest, algo_ids: List[str]) -> tuple:
+        all_pending_ng_ids: List[str] = []
+        all_effective_ng_names: Optional[List[str]] = [] if request.ng_names else None
+        seen_ng_ids: set = set()
+        for algo_id in algo_ids:
+            if request.ng_names:
+                resp = self._parser_client.get_algorithm_groups(algo_id)
+                groups = (resp.data if resp and resp.code == 200 and isinstance(resp.data, list) else [])
+                name_to_id = {g['name']: g['id'] for g in groups if g.get('name') and g.get('id')}
+                for name in request.ng_names:
+                    ng_id = name_to_id.get(name)
+                    if ng_id and ng_id not in seen_ng_ids:
+                        seen_ng_ids.add(ng_id)
+                        all_pending_ng_ids.append(ng_id)
+                        all_effective_ng_names.append(name)
+            else:
+                all_ng_ids = self._get_algo_node_group_ids(algo_id)
+                shared_ng_ids = self._get_shared_ng_ids(request.kb_id, algo_id, all_ng_ids)
+                for ng_id in all_ng_ids:
+                    if ng_id not in shared_ng_ids and ng_id not in seen_ng_ids:
+                        seen_ng_ids.add(ng_id)
+                        all_pending_ng_ids.append(ng_id)
+        return all_pending_ng_ids, all_effective_ng_names
 
     def _check_algos_for_delete(self, doc_id: str, kb_id: str, algo_ids: List[str]):
         # Returns (needs_delete_task, canceled_task_id); raises DocServiceError on conflict.
@@ -1684,7 +1692,11 @@ class DocManager:
                     remaining = self._count_non_deleted_docs_in_kb(kb_id)
                     unbind_algo_id = task_message.get('unbind_algo_id', '')
                     if remaining == 0:
-                        self._remove_kb_algo_binding(kb_id, unbind_algo_id)
+                        if not unbind_algo_id:
+                            LOG.error('[DocManager] unbind_algo_id is empty, skipping '
+                                      '_remove_kb_algo_binding for kb_id=%s', kb_id)
+                        else:
+                            self._remove_kb_algo_binding(kb_id, unbind_algo_id)
                 else:
                     self._remove_kb_document(kb_id, doc_id)
                     self._delete_ng_status(doc_id, kb_id)
@@ -1748,7 +1760,7 @@ class DocManager:
             relation = _orm_to_dict(rel_row)
             matched_items.append({
                 'relation': relation,
-                'snapshot': self._get_latest_parse_snapshot(doc_id, relation['kb_id']),
+                'snapshot': self._get_parse_snapshot(doc_id, relation['kb_id']),
             })
         relation = matched_items[0].get('relation') if matched_items else None
         snapshot = matched_items[0].get('snapshot') if matched_items else None
@@ -1940,17 +1952,6 @@ class DocManager:
             },
         }
 
-    def _batch_get_kb_algorithms(self, kb_ids: List[str]) -> Dict[str, List[str]]:
-        if not kb_ids:
-            return {}
-        with self._db_manager.get_session() as session:
-            Rel = self._db_manager.get_table_orm_class(KB_ALGORITHM_TABLE_INFO['name'])
-            rows = session.query(Rel).filter(Rel.kb_id.in_(kb_ids)).all()
-        result: Dict[str, List[str]] = {kb_id: [] for kb_id in kb_ids}
-        for row in rows:
-            result[row.kb_id].append(row.algo_id)
-        return result
-
     def list_kbs(self, page: int = 1, page_size: int = 20, keyword: Optional[str] = None,
                  status: Optional[List[str]] = None, owner_id: Optional[str] = None):
         with self._db_manager.get_session() as session:
@@ -1968,7 +1969,7 @@ class DocManager:
             query = query.order_by(Kb.updated_at.desc(), Kb.created_at.desc())
             result = self._db_manager.paginate(query, page=page, page_size=page_size)
             kb_ids = [kb_row.kb_id for kb_row in result['items']]
-            algo_map = self._batch_get_kb_algorithms(kb_ids)
+            algo_map = self._get_kb_algorithms(kb_ids)
             result['items'] = [
                 self._build_kb_data(kb_row, algo_map.get(kb_row.kb_id, []))
                 for kb_row in result['items']
@@ -1989,7 +1990,7 @@ class DocManager:
         with self._db_manager.get_session() as session:
             Kb = self._db_manager.get_table_orm_class(KBS_TABLE_INFO['name'])
             kb_rows = {row.kb_id: row for row in session.query(Kb).filter(Kb.kb_id.in_(kb_ids)).all()}
-        algo_map = self._batch_get_kb_algorithms(list(kb_rows.keys()))
+        algo_map = self._get_kb_algorithms(list(kb_rows.keys()))
         items = []
         missing_kb_ids = []
         for kb_id in kb_ids:
@@ -2053,10 +2054,11 @@ class DocManager:
         shared_ng_ids = self._get_shared_ng_ids(kb_id, algo_id, all_ng_ids)
         exclusive_ng_ids = [ng for ng in all_ng_ids if ng not in shared_ng_ids]
         doc_ids = self._list_kb_doc_ids(kb_id)
+        snapshots = {doc_id: self._get_parse_snapshot(doc_id, kb_id) for doc_id in doc_ids}
         affected_doc_ids = [
             doc_id for doc_id in doc_ids
-            if self._get_parse_snapshot(doc_id, kb_id) is not None
-            and self._get_parse_snapshot(doc_id, kb_id).get('status') not in (
+            if snapshots[doc_id] is not None
+            and snapshots[doc_id].get('status') not in (
                 DocStatus.DELETED.value, DocStatus.DELETING.value
             )
         ]
@@ -2064,7 +2066,7 @@ class DocManager:
             return {'task_ids': [], 'affected_doc_ids': affected_doc_ids, 'dry_run': True}
         task_ids = []
         for doc_id in affected_doc_ids:
-            snapshot = self._get_parse_snapshot(doc_id, kb_id)
+            snapshot = snapshots[doc_id]
             if snapshot is None or snapshot.get('status') in (DocStatus.DELETED.value, DocStatus.DELETING.value):
                 continue
             status = snapshot.get('status')

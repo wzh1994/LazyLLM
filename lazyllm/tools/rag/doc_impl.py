@@ -286,6 +286,8 @@ class DocImpl:
                     'Use a different name or version to create a distinct node group.'
                 )
             # existing_sig is empty (legacy data without signature): update in-place
+            LOG.warning('Node group %r has no signature (legacy data), updating in-place '
+                        'with new signature %r', name, new_sig)
         for t in (transforms if isinstance(transform, list) else [transforms]):
             if isinstance(t.f, str):
                 t.f = _transmap[t.f.lower()]
@@ -341,7 +343,7 @@ class DocImpl:
                 self._processor.register_new_node_group(name, dict(
                     transform=transform, parent=parent, trans_node=trans_node,
                     num_workers=num_workers, display_name=display_name,
-                    group_type=group_type, ref=ref, kwargs=kwargs,
+                    group_type=group_type, ref=ref, **kwargs,
                 ))
                 # Also update local node_groups so in-process callers see the new group.
                 DocImpl._create_node_group_impl(self, 'node_groups', name=name, transform=transform, parent=parent,
