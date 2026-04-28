@@ -80,7 +80,27 @@ ownership rules — e.g. tracing config in top-level configs.py instead of traci
 - dependency: new hard dependency that should be optional/extra (e.g. added to install_requires but \
 only used by an optional feature; should be in extras_require or optional-dependencies instead)'''
 
-_RULE_NO_OVER_DEFENSIVE = '''\
+_SHARED_STRICT_RULES_PREFIX = '''\
+STRICT RULES — violations will be rejected:
+1. Only report issues INTRODUCED or WORSENED by the diff (added/modified/deleted lines). \
+Pre-existing code smells, refactoring opportunities, or style inconsistencies in unchanged code \
+are OUT OF SCOPE even if visible in context. If the issue would exist identically without this diff, discard it.
+2. Do NOT report lint/style tool errors that automated tools already catch: \
+unused imports (F401), line-too-long, complexity metrics, missing blank lines, \
+trailing whitespace, etc. \
+HOWEVER, DO report dead code left behind by THIS diff's refactoring: \
+if the diff deletes or rewrites a function/class, and a helper function, constant, \
+or prompt template that was ONLY used by the old code is still present, that IS a valid issue \
+(bug_category: maintainability). The distinction: "unused import" = lint tool's job; \
+"orphaned function after refactoring" = reviewer's job. \
+CAVEAT — do NOT report a symbol as orphaned if any of these dynamic-reference patterns apply: \
+(a) its class uses a metaclass or __init_subclass__ (auto-registration upon definition), \
+(b) it appears in __all__, a registry dict, a @register decorator, or plugin entry-points, \
+(c) the module defines __getattr__ (dynamic attribute dispatch), \
+(d) its name follows a convention pattern (*_handler, *_impl, *_hook, *_plugin) suggesting dynamic dispatch, \
+(e) the Project Agent Instructions (AGENTS.md) describe a dynamic dispatch mechanism that covers this symbol. \
+If any pattern applies, do NOT report it; if uncertain, add \
+"(may be dynamically referenced)" and cap severity at "normal".
 3. Do NOT flag necessary defensive programming as a bug. Patterns like `max(n, 1)`, `or default`, \
 `if x is None: x = []`, guard clauses, and similar constructs are intentional safety measures — \
 report them only if they introduce a concrete logical error (e.g. masking a real zero that matters). \
@@ -111,30 +131,7 @@ WARNING) for a single operation; log messages that repeat the function name and 
 verbatim with no additional context; logging inside tight loops with no rate-limiting. \
 (h) Redundant loops or recursion — iterating over a collection only to immediately return the \
 first element (use `next()` instead); recursive calls that could be a single expression; \
-re-computing the same derived value on every iteration instead of hoisting it out of the loop.'''
-
-_SHARED_STRICT_RULES_PREFIX = '''\
-STRICT RULES — violations will be rejected:
-1. Only report issues INTRODUCED or WORSENED by the diff (added/modified/deleted lines). \
-Pre-existing code smells, refactoring opportunities, or style inconsistencies in unchanged code \
-are OUT OF SCOPE even if visible in context. If the issue would exist identically without this diff, discard it.
-2. Do NOT report lint/style tool errors that automated tools already catch: \
-unused imports (F401), line-too-long, complexity metrics, missing blank lines, \
-trailing whitespace, etc. \
-HOWEVER, DO report dead code left behind by THIS diff's refactoring: \
-if the diff deletes or rewrites a function/class, and a helper function, constant, \
-or prompt template that was ONLY used by the old code is still present, that IS a valid issue \
-(bug_category: maintainability). The distinction: "unused import" = lint tool's job; \
-"orphaned function after refactoring" = reviewer's job. \
-CAVEAT — do NOT report a symbol as orphaned if any of these dynamic-reference patterns apply: \
-(a) its class uses a metaclass or __init_subclass__ (auto-registration upon definition), \
-(b) it appears in __all__, a registry dict, a @register decorator, or plugin entry-points, \
-(c) the module defines __getattr__ (dynamic attribute dispatch), \
-(d) its name follows a convention pattern (*_handler, *_impl, *_hook, *_plugin) suggesting dynamic dispatch, \
-(e) the Project Agent Instructions (AGENTS.md) describe a dynamic dispatch mechanism that covers this symbol. \
-If any pattern applies, do NOT report it; if uncertain, add \
-"(may be dynamically referenced)" and cap severity at "normal".
-''' + _RULE_NO_OVER_DEFENSIVE + '''
+re-computing the same derived value on every iteration instead of hoisting it out of the loop.
 4. Do NOT flag a helper function as "duplicate code" or "should reuse X" unless you can confirm \
 that X exists in the current codebase AND has an identical or compatible interface. \
 Specialized helpers (e.g. agent tool wrappers, prompt builders) are NOT duplicates of \
