@@ -167,9 +167,7 @@ class DocumentProcessorWorker(ModuleBase):
                     LOG.warning(f'{self._log_prefix(task_id)} Failed to delete in-progress task')
             self._in_progress_task = None
 
-        @app.post('/set_reader')
         def set_reader(self, reader: DirectoryReader):
-            '''Set the global reader for this worker. Called by DocumentProcessor after registration.'''
             if self._reader is not None and self._reader is not reader:
                 raise ValueError('reader must be the same across all set_reader calls.')
             self._reader = reader
