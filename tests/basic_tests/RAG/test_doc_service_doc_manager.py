@@ -212,15 +212,15 @@ def test_manager_run_idempotent_atomic(manager_harness):
 
 
 def test_manager_run_idempotent_completion_failure_releases_claim(manager_harness):
-    original_complete = manager_harness.manager._complete_idempotency_record
-    manager_harness.manager._complete_idempotency_record = lambda *args, **kwargs: (_ for _ in ()).throw(
+    original_finish = manager_harness.manager._finish_idempotency
+    manager_harness.manager._finish_idempotency = lambda *args, **kwargs: (_ for _ in ()).throw(
         RuntimeError('complete failed')
-    )
+    ) if not kwargs.get('drop', False) else original_finish(*args, **kwargs)
 
     with pytest.raises(RuntimeError, match='complete failed'):
         manager_harness.manager.run_idempotent('/local/complete-fail', 'same-key', {'k': 1}, lambda: {'ok': True})
 
-    manager_harness.manager._complete_idempotency_record = original_complete
+    manager_harness.manager._finish_idempotency = original_finish
     result = manager_harness.manager.run_idempotent('/local/complete-fail', 'same-key', {'k': 1}, lambda: {'ok': True})
     assert result == {'ok': True}
 
