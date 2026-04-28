@@ -545,6 +545,10 @@ _add_bilingual_docs({
             '批量删除多个知识库。',
             'Delete multiple knowledge bases in one batch.'
         ),
+        'close': (
+            '释放底层数据库连接池等资源。',
+            'Dispose of the underlying database connection pool and release resources.'
+        ),
     }.items()
 })
 
