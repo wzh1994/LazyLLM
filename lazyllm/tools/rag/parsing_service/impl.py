@@ -67,10 +67,10 @@ class _NodeGroupDependencyGraph:
         raise AssertionError(f'No path found from {start} to {end}, the dependency graph is not valid')
 
 class _Processor:
-    def __init__(self, store: _DocumentStore, schema_extractor: Optional[SchemaExtractor] = None,
+    def __init__(self, store: _DocumentStore, schema_extractors: Optional[Dict[str, SchemaExtractor]] = None,
                  max_workers: int = 4):
         self._store = store
-        self._schema_extractor = schema_extractor
+        self._schema_extractors = schema_extractors or {}
         self._max_workers = max_workers
         self._thread_pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='global_processor')
         self._dep_graph_cache: Dict[frozenset, _NodeGroupDependencyGraph] = {}
@@ -103,7 +103,8 @@ class _Processor:
                 transfer_mode: Optional[str] = None, target_kb_id: Optional[str] = None,
                 target_doc_ids: Optional[List[str]] = None,
                 preloaded_root_nodes: Optional[Dict[str, List[DocNode]]] = None,
-                skip_ng_ids: Optional[set] = None):
+                skip_ng_ids: Optional[set] = None,
+                extractor_names: Optional[List[str]] = None):
         ids = ids or []
         try:
             if not input_files: return
@@ -141,17 +142,25 @@ class _Processor:
 
             schema_futures = []
             schema_errors: List[Exception] = []
-            # run schema extraction in parallel
-            if self._schema_extractor and not transfer_mode:
+            # run schema extraction in parallel for each extractor
+            active_extractors = {}
+            if not transfer_mode and self._schema_extractors:
+                names = extractor_names if extractor_names else list(self._schema_extractors.keys())
+                for ename in names:
+                    ext = self._schema_extractors.get(ename)
+                    if ext:
+                        active_extractors[ename] = ext
+            if active_extractors:
                 doc_to_root_nodes = defaultdict(list)
                 for n in root_nodes[LAZY_ROOT_NAME]:
                     doc_to_root_nodes[n.global_metadata.get(RAG_DOC_ID)].append(n)
 
                 if doc_to_root_nodes:
-                    for nodes in doc_to_root_nodes.values():
-                        schema_futures.append(
-                            self._thread_pool.submit(self._schema_extractor, nodes)
-                        )
+                    for ext in active_extractors.values():
+                        for nodes in doc_to_root_nodes.values():
+                            schema_futures.append(
+                                self._thread_pool.submit(ext, nodes)
+                            )
 
             if transfer_mode is None:
                 for k, v in root_nodes.items():
@@ -190,12 +199,13 @@ class _Processor:
         except Exception as cleanup_exc:
             LOG.error(f'Failed to cleanup nodes for docs {doc_ids} in kb {kb_id}: {cleanup_exc}, '
                       f'{traceback.format_exc()}')
-        if clear_schema and self._schema_extractor:
-            try:
-                self._schema_extractor._delete_extract_data(kb_id=kb_id, doc_ids=doc_ids)
-            except Exception as cleanup_exc:
-                LOG.error(f'Failed to cleanup schema data for docs {doc_ids} in kb {kb_id}: {cleanup_exc}, '
-                          f'{traceback.format_exc()}')
+        if clear_schema and self._schema_extractors:
+            for ext in self._schema_extractors.values():
+                try:
+                    ext._delete_extract_data(kb_id=kb_id, doc_ids=doc_ids)
+                except Exception as schema_exc:
+                    LOG.error(f'Failed to cleanup schema data for docs {doc_ids} in kb {kb_id}: {schema_exc}, '
+                              f'{traceback.format_exc()}')
 
     def close(self):
         self._thread_pool.shutdown(wait=True)
@@ -389,8 +399,8 @@ class _Processor:
         try:
             self._store.remove_nodes(kb_id=kb_id, doc_ids=doc_ids,
                                      node_group_ids_to_delete=node_group_ids_to_delete)
-            if self._schema_extractor:
-                self._schema_extractor._delete_extract_data(kb_id=kb_id, doc_ids=doc_ids)
+            for ext in self._schema_extractors.values():
+                ext._delete_extract_data(kb_id=kb_id, doc_ids=doc_ids)
         except Exception as e:
             LOG.error(f'Failed to delete doc: {e}, {traceback.format_exc()}')
             raise e

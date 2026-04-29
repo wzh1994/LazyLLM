@@ -128,7 +128,6 @@
 	- extract_and_store
         - register_schema_set
         - has_schema_set
-        - register_schema_set_to_kb
         - analyze_schema_and_register
     exclude-members:
 

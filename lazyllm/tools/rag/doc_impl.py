@@ -232,7 +232,7 @@ class DocImpl:
             self._processor.register_algorithm(self._algo_name, self._store, self._reader, self.node_groups,
                                                self._schema_extractor, self._display_name, self._description)
         else:
-            self._processor = _Processor(self._store, self._schema_extractor)
+            self._processor = _Processor(self._store, self._build_schema_extractors_dict())
 
         # `cloud` is True iff both dataset_path and doc_files are absent. Otherwise do a
         # one-time ingest: DocImpl only owns the scan in map-store flows now (persistent
@@ -241,6 +241,12 @@ class DocImpl:
         # and matches the empty map store. No background monitor is started.
         if not cloud:
             self._ingest_local_dataset()
+
+    def _build_schema_extractors_dict(self):
+        if self._schema_extractor is None:
+            return {}
+        ext_name = getattr(self._schema_extractor, 'name', None) or self._algo_name
+        return {ext_name: self._schema_extractor}
 
     def _resolve_index_pending_registrations(self):
         for index_type, index_cls, index_args, index_kwargs in self._index_pending_registrations:
@@ -592,8 +598,7 @@ class DocImpl:
         if not self._schema_extractor:
             raise AttributeError('No schema extractor for this Document.')
         self._create_schema_extractor()
-        set_id = self._schema_extractor.register_schema_set_to_kb(algo_id=self._algo_name, schema_set=schema_set,
-                                                                  kb_id=kb_id, force_refresh=force_refresh)
+        set_id = self._schema_extractor.register_schema_set(schema_set=schema_set, force_refresh=force_refresh)
         return set_id
 
     def _get_nodes(self, uids: Optional[List[str]] = None, doc_ids: Optional[Set] = None,

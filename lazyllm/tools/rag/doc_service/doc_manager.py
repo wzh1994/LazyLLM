@@ -723,6 +723,7 @@ class DocManager:
 
     def _create_parser_task(self, task_id: str, doc_id: str, kb_id: str, algo_id: Optional[str], task_type: TaskType,
                             ng_names: Optional[List[str]] = None,
+                            extractor_names: Optional[List[str]] = None,
                             file_path: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
                             parser_kb_id: Optional[str] = None,
                             transfer_params: Optional[Dict[str, Any]] = None,
@@ -732,7 +733,8 @@ class DocManager:
                 raise RuntimeError(f'file_path is required for task_type {task_type.value}')
             task_resp = self._parser_client.add_doc(
                 task_id, parser_kb_id or kb_id, doc_id, file_path, metadata,
-                ng_names=ng_names, task_type=task_type.value,
+                ng_names=ng_names, extractor_names=extractor_names,
+                task_type=task_type.value,
                 callback_url=self._callback_url, transfer_params=transfer_params)
         elif task_type == TaskType.DOC_UPDATE_META:
             task_resp = self._parser_client.update_meta(
@@ -781,13 +783,15 @@ class DocManager:
         try:
             resolved_ng_names, ng_ids_for_pending, exclusive_ng_ids = self._resolve_ng_for_task(
                 task_type, algo_id, algo_ids, ng_names, extra_message)
+            resolved_extractor_names = None  # None means all registered extractors
             if task_type == TaskType.DOC_ADD:
                 self._upsert_ng_status_pending(doc_id, kb_id, ng_ids_for_pending, file_path)
             elif task_type == TaskType.DOC_TRANSFER:
                 self._upsert_ng_status_pending(doc_id, kb_id, ng_ids_for_pending, file_path, force=True)
             self._create_parser_task(
                 task_id, parser_doc_id or doc_id, kb_id, algo_id, task_type,
-                ng_names=resolved_ng_names, file_path=file_path, metadata=metadata,
+                ng_names=resolved_ng_names, extractor_names=resolved_extractor_names,
+                file_path=file_path, metadata=metadata,
                 parser_kb_id=parser_kb_id, transfer_params=transfer_params,
                 node_group_ids_to_delete=exclusive_ng_ids)
         except Exception as exc:

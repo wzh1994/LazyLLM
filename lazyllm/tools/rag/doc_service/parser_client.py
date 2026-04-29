@@ -31,11 +31,13 @@ class ParserClient:
 
     def add_doc(self, task_id: str, kb_id: str, doc_id: str, file_path: str,
                 metadata: Optional[Dict[str, Any]] = None, ng_names: Optional[List[str]] = None,
+                extractor_names: Optional[List[str]] = None,
                 task_type: Optional[str] = None,
                 callback_url: Optional[str] = None, transfer_params: Optional[Dict[str, Any]] = None):
         req = ParsingAddDocRequest(
             task_id=task_id,
             ng_names=ng_names,
+            extractor_names=extractor_names,
             task_type=task_type,
             kb_id=kb_id,
             callback_url=callback_url,

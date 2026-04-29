@@ -75,7 +75,7 @@ class DocumentProcessor(ModuleBase):
             self._finished_task_queue = None
             self._post_func_thread = None
             self._workers = None
-            self._schema_extractor: Optional[SchemaExtractor] = None
+            self._schema_extractors: Dict[str, SchemaExtractor] = {}
             self._reader: Optional[DirectoryReader] = None  # global reader, set by register_algorithm
 
         @once_wrapper(reset_on_pickle=True)
@@ -120,6 +120,11 @@ class DocumentProcessor(ModuleBase):
                     self._workers.set_reader(self._reader)
                 except Exception as e:
                     LOG.warning(f'[DocumentProcessor] Failed to push reader to workers: {e}')
+            if self._schema_extractors and self._workers is not None:
+                try:
+                    self._workers.set_schema_extractors(self._schema_extractors)
+                except Exception as e:
+                    LOG.warning(f'[DocumentProcessor] Failed to push schema extractors to workers: {e}')
             LOG.info('[DocumentProcessor] Lazy initialization completed!')
 
         def __getstate__(self):
@@ -311,16 +316,18 @@ class DocumentProcessor(ModuleBase):
                 response.raise_for_status()
             return True
 
-        def _validate_schema_extractor(self, schema_extractor):
+        def _register_schema_extractor(self, algo_name: str, schema_extractor):
             if schema_extractor is None:
                 return
-            if self._schema_extractor is None:
-                self._schema_extractor = schema_extractor
-            elif self._schema_extractor is not schema_extractor:
-                raise ValueError(
-                    'schema_extractor must be the same across all register_algorithm calls. '
-                    'Only one global schema_extractor is supported per DocumentProcessor.'
-                )
+            ext_name = schema_extractor.name or algo_name
+            existing = self._schema_extractors.get(ext_name)
+            if existing is not None and existing is not schema_extractor:
+                if existing._active_schema_set_id and schema_extractor._active_schema_set_id:
+                    if existing._active_schema_set_id != schema_extractor._active_schema_set_id:
+                        raise ValueError(
+                            f'Schema extractor name conflict: "{ext_name}" already registered with a different schema.'
+                        )
+            self._schema_extractors[ext_name] = schema_extractor
 
         def _validate_reader(self, reader):
             if reader is None:
@@ -340,7 +347,7 @@ class DocumentProcessor(ModuleBase):
             # NOTE: name is the algorithm id, display_name is the algorithm display name
             self._lazy_init()
             LOG.info(f'[DocumentProcessor] Register algorithm: name={name}, display_name={display_name}')
-            self._validate_schema_extractor(schema_extractor)
+            self._register_schema_extractor(name, schema_extractor)
             self._validate_reader(reader)
             try:
                 # Upsert node groups and algorithm in a single transaction to ensure atomicity.
@@ -369,6 +376,11 @@ class DocumentProcessor(ModuleBase):
                         self._workers.set_reader(reader)
                     except Exception as e:
                         LOG.warning(f'[DocumentProcessor] Failed to push reader to workers: {e}')
+                if schema_extractor is not None and self._workers is not None:
+                    try:
+                        self._workers.set_schema_extractors(self._schema_extractors)
+                    except Exception as e:
+                        LOG.warning(f'[DocumentProcessor] Failed to push schema extractors to workers: {e}')
             except Exception as e:
                 LOG.error(f'[DocumentProcessor] Failed to register algorithm: {e}, {traceback.format_exc()}')
                 raise

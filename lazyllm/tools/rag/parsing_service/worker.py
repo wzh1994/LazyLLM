@@ -173,6 +173,10 @@ class DocumentProcessorWorker(ModuleBase):
             self._reader = reader
             return BaseResponse(code=200, msg='success')
 
+        def set_schema_extractors(self, schema_extractors: Dict):
+            self._schema_extractors = schema_extractors
+            return BaseResponse(code=200, msg='success')
+
         @app.get('/health')
         def get_health(self):
             self._lazy_init()
@@ -212,8 +216,8 @@ class DocumentProcessorWorker(ModuleBase):
                         return self._processor
                     store_conf = self._store_conf or {'type': 'map'}
                     store = _DocumentStore(store=store_conf)
-                    schema_extractor = getattr(self, '_schema_extractor', None)
-                    self._processor = _Processor(store=store, schema_extractor=schema_extractor)
+                    schema_extractors = getattr(self, '_schema_extractors', {})
+                    self._processor = _Processor(store=store, schema_extractors=schema_extractors)
                     LOG.info(f'{self._log_prefix()} Created global processor')
                 return self._processor
             except Exception as e:
@@ -289,7 +293,8 @@ class DocumentProcessorWorker(ModuleBase):
 
         def _exec_add_task(self, processor: _Processor, task_id: str, payload: dict,
                            node_groups: Dict[str, Dict], name_to_id: Dict[str, str],
-                           reader: Optional[DirectoryReader]):
+                           reader: Optional[DirectoryReader],
+                           extractor_names: Optional[List[str]] = None):
             file_infos = payload.get('file_infos')
             kb_id = payload.get('kb_id', None)
             input_files = []
@@ -312,7 +317,8 @@ class DocumentProcessorWorker(ModuleBase):
 
             try:
                 processor.add_doc(input_files=input_files, ids=ids, metadatas=metadatas, kb_id=kb_id,
-                                  node_groups=node_groups, reader=reader, skip_ng_ids=skip_ng_ids)
+                                  node_groups=node_groups, reader=reader, skip_ng_ids=skip_ng_ids,
+                                  extractor_names=extractor_names)
                 if kb_id and exec_ng_ids:
                     self._write_ng_status_batch(ids, list(exec_ng_ids), kb_id, 'SUCCESS')
             except Exception as e:
@@ -591,6 +597,7 @@ class DocumentProcessorWorker(ModuleBase):
                 if from_queue:
                     self._start_lease_renewal(task_id)
                 ng_names = payload.get('ng_names')  # None means all node groups
+                extractor_names = payload.get('extractor_names')  # None means all extractors
 
                 LOG.info(f'{self._log_prefix(task_id)} Start processing task: '
                          f'{self._summarize_task_payload(task_type, payload)}')
@@ -607,7 +614,8 @@ class DocumentProcessorWorker(ModuleBase):
                 reader = self._reader  # global reader, set by DocumentProcessor before start
                 if task_type == TaskType.DOC_ADD.value:
                     self._exec_add_task(processor, task_id, payload, node_groups=node_groups,
-                                        name_to_id=name_to_id, reader=reader)
+                                        name_to_id=name_to_id, reader=reader,
+                                        extractor_names=extractor_names)
                 elif task_type == TaskType.DOC_REPARSE.value:
                     self._exec_reparse_task(processor, task_id, payload, node_groups=node_groups,
                                             name_to_id=name_to_id, reader=reader)
@@ -869,6 +877,9 @@ class DocumentProcessorWorker(ModuleBase):
 
     def set_reader(self, reader: 'DirectoryReader'):
         return self._dispatch('set_reader', reader)
+
+    def set_schema_extractors(self, schema_extractors):
+        return self._dispatch('set_schema_extractors', schema_extractors)
 
     def stop(self):
         LOG.info('[DocumentProcessorWorker] Stopping worker...')

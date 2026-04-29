@@ -37,6 +37,7 @@ EmptyDBInfo = Annotated[DBInfo | None, BeforeValidator(lambda v: None if v == {}
 class AddDocRequest(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid4()))
     ng_names: Optional[List[str]] = None  # node group names to process; None means all
+    extractor_names: Optional[List[str]] = None  # schema extractor names to run; None means all
     task_type: Optional[str] = None       # DOC_ADD / DOC_REPARSE / DOC_TRANSFER; resolved if None
     kb_id: Optional[str] = None
     file_infos: List[FileInfo]

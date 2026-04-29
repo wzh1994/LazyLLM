@@ -49,7 +49,7 @@ class TestSchemaExtractor(unittest.TestCase):
         class SchemaSet1(BaseModel):
             name: str = Field(description='Name of the people', default='unknown')
             age: int = Field(description='Age of the people', default=0)
-        self.extractor.register_schema_set_to_kb(schema_set=SchemaSet1)
+        self.extractor.register_schema_set(schema_set=SchemaSet1)
         res = self.extractor('Tom is a boy, he is eleven.')
         assert isinstance(res, ExtractResult)
         assert res.data.get('name', '') == 'Tom'

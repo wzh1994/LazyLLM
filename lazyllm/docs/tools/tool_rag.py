@@ -731,91 +731,71 @@ Args:
 """)
 
 add_chinese_doc('Document.connect_sql_manager', """\
-连接 SQL 管理器并初始化文档与数据库的映射处理器。
+.. deprecated:: 已废弃，请直接使用 SchemaExtractor。
 
-此方法会验证数据库连接，并根据传入的文档表模式（schema）更新或重置数据库表结构。如果已存在的 schema 与新传入的 schema 不一致，则需要设置 ``force_refresh=True`` 以强制刷新。
-
-Args:
-    sql_manager (SqlManager): SQL 管理器实例，用于连接和操作数据库。
-    schma (Optional[DocInfoSchema]): 文档表模式定义。包含字段名称、类型及描述。
-    force_refresh (bool, optional): 当 schema 发生变化时，是否强制刷新数据库表结构。默认为 ``True``。
-
-Raises:
-    RuntimeError: 当数据库连接失败时抛出。
-    AssertionError: 当未提供 schema 或 schema 变更时未设置 ``force_refresh`` 抛出。
+此方法已移除，请使用 ``SchemaExtractor`` 配合 ``register_schema_set`` 替代。
 """)
 
 add_english_doc('Document.connect_sql_manager', """\
-Connect to the SQL manager and initialize the document-to-database processor.
+.. deprecated:: Use SchemaExtractor directly.
 
-This method validates the database connection and updates or resets the database table schema based on the provided document schema. If the existing schema differs from the new one, ``force_refresh=True`` must be set to enforce a reset.
-
-Args:
-    sql_manager (SqlManager): SQL manager instance for database connection and operations.
-    schma (Optional[DocInfoSchema]): Document table schema definition, including field names, types, and descriptions.
-    force_refresh (bool, optional): Whether to force refresh the database schema when changes are detected. Defaults to ``True``.
-
-Raises:
-    RuntimeError: If the database connection fails.
-    AssertionError: If schema is missing or schema change occurs without setting ``force_refresh``.
+This method is removed. Use ``SchemaExtractor`` with ``register_schema_set`` instead.
 """)
 
 add_chinese_doc('Document.get_sql_manager', """\
-获取当前文档模块绑定的 SQL 管理器实例。
+.. deprecated:: 请使用 ``SchemaExtractor.sql_manager_for_nl2sql()``。
 
-**Returns:**\n
-- SqlManager: 已连接的 SQL 管理器实例。
+获取当前文档模块绑定的 SchemaExtractor 的 SQL 管理器实例。
+
+**Returns:**\\n
+- SqlManager: SQL 管理器实例。
 """)
 
 add_english_doc('Document.get_sql_manager', """\
-Get the SQL manager instance currently bound to this document module.
+.. deprecated:: Use ``SchemaExtractor.sql_manager_for_nl2sql()``.
 
-**Returns:**\n
-- SqlManager: The connected SQL manager instance.
+Get the SQL manager instance from the SchemaExtractor bound to this document module.
+
+**Returns:**\\n
+- SqlManager: The SQL manager instance.
 """)
 
 add_chinese_doc('Document.extract_db_schema', """\
+.. deprecated:: 请使用 ``SchemaExtractor.analyze_schema_and_register()``。
+
 基于文档数据集和大语言模型自动提取数据库表模式（schema）。
 
-此方法会扫描数据集中的所有文件，并调用大语言模型提取文档信息结构。可选择是否打印提取的 schema。
-
 Args:
-    llm (Union[OnlineChatModule, TrainableModule]): 用于解析文档并提取 schema 的模型。
+    llm (Union[OnlineChatModule, TrainableModule], optional): 已废弃，使用 SchemaExtractor 自带的 LLM。
     print_schema (bool, optional): 是否在日志中打印提取的 schema。默认为 ``False``。
-
-**Returns:**\n
-- DocInfoSchema: 提取的数据库表模式。
 """)
 
 add_english_doc('Document.extract_db_schema', """\
-Extract the database schema from the dataset using a large language model.
+.. deprecated:: Use ``SchemaExtractor.analyze_schema_and_register()``.
 
-This method scans all files in the dataset and uses the LLM to extract document information schema. Optionally, the schema can be printed to the logs.
+Extract the database schema from the dataset using the SchemaExtractor's LLM.
 
 Args:
-    llm (Union[OnlineChatModule, TrainableModule]): Model used to parse documents and extract schema.
+    llm (Union[OnlineChatModule, TrainableModule], optional): Deprecated, uses the SchemaExtractor's built-in LLM.
     print_schema (bool, optional): Whether to log the extracted schema. Defaults to ``False``.
-
-**Returns:**\n
-- DocInfoSchema: The extracted database schema.
 """)
 
 add_chinese_doc('Document.update_database', """\
-使用大语言模型解析文档并将提取的信息更新到数据库。
+.. deprecated:: 请使用 ``SchemaExtractor.forward()`` 或 ``extract_and_store()``。
 
-此方法会遍历数据集中的所有文件，提取文档结构化信息，并将其写入数据库。
+使用 SchemaExtractor 解析文档并将提取的信息更新到数据库。
 
 Args:
-    llm (Union[OnlineChatModule, TrainableModule]): 用于解析文档并提取信息的大语言模型。
+    llm (Union[OnlineChatModule, TrainableModule], optional): 已废弃，使用 SchemaExtractor 自带的 LLM。
 """)
 
 add_english_doc('Document.update_database', """\
-Update the database with information extracted from documents using a large language model.
+.. deprecated:: Use ``SchemaExtractor.forward()`` or ``extract_and_store()``.
 
-This method iterates through all files in the dataset, extracts structured information, and exports it into the database.
+Update the database with information extracted from documents using the SchemaExtractor.
 
 Args:
-    llm (Union[OnlineChatModule, TrainableModule]): Model used to parse documents and extract information.
+    llm (Union[OnlineChatModule, TrainableModule], optional): Deprecated, uses the SchemaExtractor's built-in LLM.
 """)
 
 add_chinese_doc('Document.create_kb_group', """\
@@ -2037,31 +2017,15 @@ Args:
 ''')
 
 add_chinese_doc('rag.doc_to_db.SchemaExtractor.register_schema_set_to_kb', '''
-将算法/知识库绑定到指定 schema 集合；若提供 schema_set 会先注册；可选 force_refresh 覆盖已有绑定并清理旧数据。
+.. deprecated:: 已移除，请使用 ``register_schema_set``。
 
-Args:
-    algo_id (str, optional): 算法/Document 名称，默认 `__default__`。
-    kb_id (str, optional): 知识库 ID，默认 DEFAULT_KB_ID。
-    schema_set_id (str, optional): 已有 schema 集合 ID。
-    schema_set (Type[BaseModel], optional): 新 schema，传入则会注册后绑定。
-    force_refresh (bool, optional): 已绑定不同 schema 时是否强制覆盖并清空旧记录。
-
-**Returns:**\n
-- str: 绑定使用的 schema_set_id。
+原方法用于将算法/知识库绑定到 schema 集合，现已移除。请直接使用 ``register_schema_set(schema_set)``。
 ''')
 
 add_english_doc('rag.doc_to_db.SchemaExtractor.register_schema_set_to_kb', '''
-Bind an algo/kb pair to a schema set; optionally register a provided schema_set first; with force_refresh you can override an existing binding and purge old records.
+.. deprecated:: Removed. Use ``register_schema_set`` instead.
 
-Args:
-    algo_id (str, optional): Algorithm/Document name, defaults to `__default__`.
-    kb_id (str, optional): Knowledge base id, defaults to DEFAULT_KB_ID.
-    schema_set_id (str, optional): Existing schema set id to bind.
-    schema_set (Type[BaseModel], optional): Schema to register and bind if no id is provided.
-    force_refresh (bool, optional): Whether to overwrite an existing different binding and clean previous records.
-
-**Returns:**\n
-- str: The schema_set_id used for binding.
+This method has been removed. Use ``register_schema_set(schema_set)`` directly.
 ''')
 
 add_chinese_doc('rag.doc_to_db.SchemaExtractor.analyze_schema_and_register', '''
@@ -2087,29 +2051,27 @@ Args:
 ''')
 
 add_chinese_doc('rag.doc_to_db.SchemaExtractor.extract_and_store', '''
-按绑定的 schema 抽取文本/DocNode 内容并写入对应表，若传入 schema_set 会先注册；同文档重复调用会返回缓存结果。
+按已注册的 schema 抽取文本/DocNode 内容并写入对应表，若传入 schema_set 会先注册；同文档重复调用会返回缓存结果。
 
 Args:
     data (Union[str, List[DocNode]]): 文本或 DocNode 列表（需同一文档）。
-    algo_id (str, optional): 算法/Document 名称，默认 `__default__`。
     schema_set_id (str, optional): 指定使用的 schema 集合 ID。
     schema_set (Type[BaseModel], optional): 动态注册并使用的 schema。
 
 **Returns:**\n
-- ExtractResult: 抽取结果，`data` 为字段名到值的字典，`metadata` 包含 schema_set_id、algo_id、kb_id、doc_id 及按字段的线索信息；可能为 None 表示无可写入。
+- ExtractResult: 抽取结果，`data` 为字段名到值的字典，`metadata` 包含 schema_set_id、kb_id、doc_id 及按字段的线索信息；可能为 None 表示无可写入。
 ''')
 
 add_english_doc('rag.doc_to_db.SchemaExtractor.extract_and_store', '''
-Extract content according to the bound schema and persist it; will register the provided schema_set if given; repeated calls for the same doc return cached results.
+Extract content according to the registered schema and persist it; will register the provided schema_set if given; repeated calls for the same doc return cached results.
 
 Args:
     data (Union[str, List[DocNode]]): Text or list of DocNodes from a single document.
-    algo_id (str, optional): Algorithm/Document name, defaults to `__default__`.
     schema_set_id (str, optional): Schema set id to use.
     schema_set (Type[BaseModel], optional): Schema to register and use if no id is provided.
 
 **Returns:**\n
-- ExtractResult: Result object where `data` is the field/value dict and `metadata` contains schema_set_id, algo_id, kb_id, doc_id, and field-level clues; or None if nothing persisted.
+- ExtractResult: Result object where `data` is the field/value dict and `metadata` contains schema_set_id, kb_id, doc_id, and field-level clues; or None if nothing persisted.
 ''')
 
 add_chinese_doc('rag.doc_to_db.SchemaExtractor.__call__', '''
@@ -2135,10 +2097,9 @@ Args:
 ''')
 
 add_chinese_doc('rag.doc_to_db.SchemaExtractor.sql_manager_for_nl2sql', '''
-基于已绑定的 schema，生成一个仅暴露相关表的 SqlManager，用于 SqlCall 模块中 NL2SQL 查询；会附带表结构描述和可见表列表。
+基于已注册的 schema，生成一个仅暴露相关表的 SqlManager，用于 SqlCall 模块中 NL2SQL 查询；会附带表结构描述和可见表列表。
 
 Args:
-    algo_id (str, optional): 算法/Document 名称；不传则返回所有绑定关系的可见表。
     kb_ids (Union[str, List[str]], optional): 过滤的知识库 ID，可单个或列表。
 
 **Returns:**\n
@@ -2146,11 +2107,10 @@ Args:
 ''')
 
 add_english_doc('rag.doc_to_db.SchemaExtractor.sql_manager_for_nl2sql', '''
-Create a SqlManager tailored for NL2SQL in SqlCall Module that only exposes tables bound to the given algo/kb, with descriptions of columns and visible tables.
+Create a SqlManager tailored for NL2SQL in SqlCall Module that only exposes the table for the active schema set, with descriptions of columns and visible tables.
 
 Args:
-    algo_id (str, optional): Algorithm/Document name; when omitted, returns all bound tables.
-    kb_ids (Union[str, List[str]], optional): KB id or list to filter bindings.
+    kb_ids (Union[str, List[str]], optional): KB id or list to filter rows.
 
 **Returns:**\n
 - SqlManager: Manager instance with visible_tables and column metadata set for NL2SQL use.
@@ -2176,13 +2136,12 @@ class TestSchema(BaseModel):
 
 extractor = SchemaExtractor(db_config=db_config, llm=OnlineChatModule(source='siliconflow'), force_refresh=True)
 # register to db
-extractor.register_schema_set_to_kb(schema_set=TestSchema)
+extractor.register_schema_set(schema_set=TestSchema)
 text = "The company name is Apple, and the profit is 100 million."
 # you can use it directly by giving a string
 res = extractor(data=text)
 
-# bind the schema for a specific algorithm(Document)
-extractor.register_schema_set_to_kb(algo_id='algo_1', schema_set=TestSchema)
+# use the extractor with a Document
 document = Document(
     dataset_path='./test_docs',
     name="algo_1",
@@ -2195,142 +2154,58 @@ document = Document(
 
 
 add_chinese_doc('rag.doc_to_db.DocToDbProcessor', '''\
-用于将文档信息抽取并导出到数据库中。
-
-该类通过分析文档主题、抽取字段结构、从文档中提取关键信息，并将其保存至数据库表中。
-
-Args:
-    sql_manager (SqlManager): SQL数据库管理器实例
-    doc_table_name (str, optional): 文档信息存储表名，默认为"lazyllm_doc_elements"
-
-Note:
-    - 如果表已存在，会自动检测并避免重复创建。
-    - 如果你希望重置字段结构，使用 `reset_doc_info_schema` 方法。
+.. deprecated:: 已移除，请使用 ``SchemaExtractor``。
 ''')
 
 add_english_doc('rag.doc_to_db.DocToDbProcessor', '''\
-Used to extract information from documents and export it to a database.
-
-This class analyzes document topics, extracts schema structure, pulls out key information, and saves it into a database table.
-
-Args:
-    sql_manager (SqlManager): SQL database manager instance
-    doc_table_name (str, optional): Document information storage table name, defaults to "lazyllm_doc_elements"
-Note:
-    - If the table already exists, it checks and avoids redundant creation.
-    - Use `reset_doc_info_schema` to reset the schema if necessary.
+.. deprecated:: Removed. Use ``SchemaExtractor`` instead.
 ''')
 
 add_chinese_doc('rag.doc_to_db.DocToDbProcessor.extract_info_from_docs', '''\
-从文档中提取结构化数据库信息。
-
-该函数使用嵌入和检索技术，在提供的文档中获取数据库相关的文本片段，用于后续模式生成。
-
-Args:
-    llm (Union[OnlineChatModule, TrainableModule]): 大语言模型实例
-    doc_paths (List[str]): 要处理的文档路径列表
-    extra_desc (str, optional): 额外的描述信息，用于辅助提取
-
-**Returns:**\n
-- List[dict]: 提取的信息字典列表，每个字典对应一个文档的提取结果
+.. deprecated:: 已移除，请使用 ``SchemaExtractor.extract_and_store()``。
 ''')
 
 add_english_doc('rag.doc_to_db.DocToDbProcessor.extract_info_from_docs', '''\
-Extract structured database-related information from documents.
-
-This function uses embedding and retrieval techniques to identify relevant text fragments in the provided documents for schema generation.
-
-Args:
-    llm (Union[OnlineChatModule, TrainableModule]): Large language model instance
-    doc_paths (List[str]): Document paths to process
-    extra_desc (str, optional): Additional description information to assist extraction
-**Returns:**\n
-- List[dict]: Extracted information dictionary list, each dictionary corresponds to one document's extraction result
+.. deprecated:: Removed. Use ``SchemaExtractor.extract_and_store()`` instead.
 ''')
 
 add_chinese_doc('rag.doc_to_db.DocToDbProcessor.export_info_to_db', """\
-将提取的信息导出到数据库。
-
-将提取的结构化信息批量插入到数据库表中，自动生成UUID和时间戳。
-
-Args:
-    info_dicts (List[dict]): 要导出的信息字典列表
+.. deprecated:: 已移除，请使用 ``SchemaExtractor.extract_and_store()``。
 """)
 
 add_english_doc('rag.doc_to_db.DocToDbProcessor.export_info_to_db', """\
-Export extracted information to database.
-
-Bulk inserts extracted structured information into database table, automatically generating UUID and timestamps.
-
-Args:
-    info_dicts (List[dict]): Information dictionary list to export
+.. deprecated:: Removed. Use ``SchemaExtractor.extract_and_store()`` instead.
 """)
 
 add_chinese_doc('rag.doc_to_db.DocToDbProcessor.analyze_info_schema_by_llm', '''\
-使用大语言模型从文档节点中推断数据库信息结构。
-
-Args:
-    llm (Union[OnlineChatModule, TrainableModule]): 大语言模型实例
-    doc_paths (List[str]): 文档路径列表
-    doc_topic (str, optional): 文档主题，如果为空会自动分析
-
-**Returns:**\n
-- DocInfoSchema: 分析得到的文档信息模式列表
+.. deprecated:: 已移除，请使用 ``SchemaExtractor.analyze_schema_and_register()``。
 ''')
 
 add_english_doc('rag.doc_to_db.DocToDbProcessor.analyze_info_schema_by_llm', '''\
-Infer structured database information using a large language model from document nodes.
-
-Args:
-    llm (Union[OnlineChatModule, TrainableModule]): Large language model instance
-    doc_paths (List[str]): Document path list
-    doc_topic (str, optional): Document topic, will be automatically analyzed if empty
-
-**Returns:**\n
-- DocInfoSchema: Analyzed document information schema list
+.. deprecated:: Removed. Use ``SchemaExtractor.analyze_schema_and_register()`` instead.
 ''')
 
 add_chinese_doc('rag.doc_to_db.DocToDbProcessor.clear', """\
-清除处理器状态和数据库表结构。
-
-清空当前文档信息模式、移除ORM类映射，并可选地删除数据库中的文档表。
+.. deprecated:: 已移除。
 """)
 
 add_english_doc('rag.doc_to_db.DocToDbProcessor.clear', """\
-Clear processor state and database table structures.
-
-Clears current document information schema, removes ORM class mappings, and optionally deletes document table from database.
+.. deprecated:: Removed.
 """)
 
 add_chinese_doc('rag.doc_to_db.extract_db_schema_from_files', '''\
-给定文档路径和LLM模型，提取文档结构信息。
-
-Args:
-    file_paths (List[str]): 要分析的文档路径。
-    llm (Union[OnlineChatModule, TrainableModule]): 支持聊天的模型模块。
-
-**Returns:**\n
-- DocInfoSchema: 提取出的字段结构描述。
+.. deprecated:: 已移除，请使用 ``SchemaExtractor.analyze_schema_and_register()``。
 ''')
 
 add_english_doc('rag.doc_to_db.extract_db_schema_from_files', '''\
-Extract the schema information from documents using a given LLM.
-
-Args:
-    file_paths (List[str]): Paths of the documents to analyze.
-    llm (Union[OnlineChatModule, TrainableModule]): A chat-supported LLM module.
-
-**Returns:**\n
-- DocInfoSchema: The extracted field structure schema.
+.. deprecated:: Removed. Use ``SchemaExtractor.analyze_schema_and_register()`` instead.
 ''')
 
 add_example('rag.doc_to_db.extract_db_schema_from_files', '''\
->>> import lazyllm
->>> from lazyllm.components.document_to_db import extract_db_schema_from_files
->>> llm = lazyllm.OnlineChatModule()
->>> file_paths = ["doc1.pdf", "doc2.pdf"]
->>> schema = extract_db_schema_from_files(file_paths, llm)
->>> print(schema)
+>>> # Deprecated. Use SchemaExtractor instead:
+>>> from lazyllm.tools.rag import SchemaExtractor
+>>> extractor = SchemaExtractor(db_config=db_config, llm=llm)
+>>> extractor.analyze_schema_and_register(data=file_paths)
 ''')
 
 add_chinese_doc('rag.readers.DocxReader', """\
