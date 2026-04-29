@@ -211,16 +211,31 @@ class _DummyLLM(LLMBase):
 
 
 class TestSchemaExtractorRegression(unittest.TestCase):
+    def _make_extractor(self, db_path):
+        return SchemaExtractor(
+            db_config={'db_type': 'sqlite', 'user': None, 'password': None,
+                       'host': None, 'port': None, 'db_name': db_path},
+            llm=_DummyLLM(),
+        )
+
+    def _cleanup(self, extractor, db_path):
+        if extractor is not None:
+            for tname in list(extractor._table_cache.keys()):
+                from lazyllm.tools.rag.doc_to_db.model import _TableBase
+                tbl = _TableBase.metadata.tables.get(tname)
+                if tbl is not None:
+                    _TableBase.metadata.remove(tbl)
+            if extractor._sql_manager is not None:
+                extractor._sql_manager.dispose()
+        if os.path.exists(db_path):
+            os.remove(db_path)
+
     def test_ensure_table_handles_existing_composite_primary_key(self):
         fd, db_path = tempfile.mkstemp(suffix='.db')
         os.close(fd)
         extractor = None
         try:
-            extractor = SchemaExtractor(
-                db_config={'db_type': 'sqlite', 'user': None, 'password': None, 'host': None, 'port': None,
-                           'db_name': db_path},
-                llm=_DummyLLM(),
-            )
+            extractor = self._make_extractor(db_path)
 
             class SchemaSet(BaseModel):
                 company: str = Field(default='unknown')
@@ -231,11 +246,143 @@ class TestSchemaExtractorRegression(unittest.TestCase):
             extractor._table_cache.pop(table_name, None)
             extractor._ensure_table(schema_set_id, SchemaSet)
         finally:
-            # Dispose the sqlite engine so Windows can remove the temp file.
-            if extractor is not None and extractor._sql_manager is not None:
-                extractor._sql_manager.dispose()
-            if os.path.exists(db_path):
-                os.remove(db_path)
+            self._cleanup(extractor, db_path)
+
+    def test_active_schema_set_id_set_after_register(self):
+        fd, db_path = tempfile.mkstemp(suffix='.db')
+        os.close(fd)
+        extractor = None
+        try:
+            extractor = self._make_extractor(db_path)
+            assert extractor._active_schema_set_id is None
+
+            class MySchema(BaseModel):
+                name: str = Field(default='')
+
+            sid = extractor.register_schema_set(MySchema, schema_set_id=uuid.uuid4().hex)
+            assert extractor._active_schema_set_id == sid
+        finally:
+            self._cleanup(extractor, db_path)
+
+    def test_validate_extract_params_uses_active_schema_set_id(self):
+        fd, db_path = tempfile.mkstemp(suffix='.db')
+        os.close(fd)
+        extractor = None
+        try:
+            extractor = self._make_extractor(db_path)
+            with self.assertRaises(ValueError, msg='No active schema set'):
+                extractor._validate_extract_params('some text')
+
+            class MySchema(BaseModel):
+                name: str = Field(default='')
+
+            sid = extractor.register_schema_set(MySchema, schema_set_id=uuid.uuid4().hex)
+            kb_id, doc_id, active_id = extractor._validate_extract_params('hello')
+            assert active_id == sid
+            assert kb_id is not None
+            assert doc_id is not None
+        finally:
+            self._cleanup(extractor, db_path)
+
+    def test_delete_extract_data_no_algo_id(self):
+        fd, db_path = tempfile.mkstemp(suffix='.db')
+        os.close(fd)
+        extractor = None
+        try:
+            extractor = self._make_extractor(db_path)
+
+            class MySchema(BaseModel):
+                title: str = Field(default='')
+
+            extractor.register_schema_set(MySchema, schema_set_id=uuid.uuid4().hex)
+            result = extractor._delete_extract_data(doc_ids=['doc1'], kb_id='kb1')
+            assert result is True
+        finally:
+            self._cleanup(extractor, db_path)
+
+    def test_delete_extract_data_returns_true_when_no_active_schema(self):
+        fd, db_path = tempfile.mkstemp(suffix='.db')
+        os.close(fd)
+        extractor = None
+        try:
+            extractor = self._make_extractor(db_path)
+            result = extractor._delete_extract_data(doc_ids=['doc1'], kb_id='kb1')
+            assert result is True
+        finally:
+            self._cleanup(extractor, db_path)
+
+    def test_get_extract_data_no_algo_id(self):
+        fd, db_path = tempfile.mkstemp(suffix='.db')
+        os.close(fd)
+        extractor = None
+        try:
+            extractor = self._make_extractor(db_path)
+
+            class MySchema(BaseModel):
+                title: str = Field(default='')
+
+            extractor.register_schema_set(MySchema, schema_set_id=uuid.uuid4().hex)
+            results = extractor._get_extract_data(doc_ids=['nonexistent'], kb_id='kb1')
+            assert results == []
+        finally:
+            self._cleanup(extractor, db_path)
+
+    def test_has_schema_set_returns_false_for_unknown_id(self):
+        fd, db_path = tempfile.mkstemp(suffix='.db')
+        os.close(fd)
+        extractor = None
+        try:
+            extractor = self._make_extractor(db_path)
+            extractor._lazy_init()
+            assert extractor.has_schema_set('nonexistent') is False
+        finally:
+            self._cleanup(extractor, db_path)
+
+    def test_register_schema_set_idempotent(self):
+        fd, db_path = tempfile.mkstemp(suffix='.db')
+        os.close(fd)
+        extractor = None
+        try:
+            extractor = self._make_extractor(db_path)
+
+            class MySchema(BaseModel):
+                name: str = Field(default='')
+
+            test_id = uuid.uuid4().hex
+            sid1 = extractor.register_schema_set(MySchema, schema_set_id=test_id)
+            sid2 = extractor.register_schema_set(MySchema, schema_set_id=test_id)
+            assert sid1 == sid2 == test_id
+            assert extractor.has_schema_set(test_id) is True
+        finally:
+            self._cleanup(extractor, db_path)
+
+    def test_sql_manager_for_nl2sql_requires_active_schema(self):
+        fd, db_path = tempfile.mkstemp(suffix='.db')
+        os.close(fd)
+        extractor = None
+        try:
+            extractor = self._make_extractor(db_path)
+            extractor._lazy_init()
+            with self.assertRaises(ValueError, msg='No active schema set'):
+                extractor.sql_manager_for_nl2sql()
+        finally:
+            self._cleanup(extractor, db_path)
+
+    def test_sql_manager_for_nl2sql_with_kb_ids(self):
+        fd, db_path = tempfile.mkstemp(suffix='.db')
+        os.close(fd)
+        extractor = None
+        try:
+            extractor = self._make_extractor(db_path)
+
+            class MySchema(BaseModel):
+                name: str = Field(default='')
+
+            extractor.register_schema_set(MySchema, schema_set_id=uuid.uuid4().hex)
+            mgr = extractor.sql_manager_for_nl2sql(kb_ids=['kb1'])
+            assert mgr is not None
+        finally:
+            self._cleanup(extractor, db_path)
 
 class TestDocument(unittest.TestCase):
     @classmethod
