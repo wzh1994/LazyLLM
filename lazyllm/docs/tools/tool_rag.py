@@ -743,59 +743,47 @@ This method is removed. Use ``SchemaExtractor`` with ``register_schema_set`` ins
 """)
 
 add_chinese_doc('Document.get_sql_manager', """\
-.. deprecated:: 请使用 ``SchemaExtractor.sql_manager_for_nl2sql()``。
-
-获取当前文档模块绑定的 SchemaExtractor 的 SQL 管理器实例。
+获取当前文档模块绑定的 SchemaExtractor 的 NL2SQL 管理器实例，可用于构建 SqlCall。
 
 **Returns:**\\n
 - SqlManager: SQL 管理器实例。
 """)
 
 add_english_doc('Document.get_sql_manager', """\
-.. deprecated:: Use ``SchemaExtractor.sql_manager_for_nl2sql()``.
-
-Get the SQL manager instance from the SchemaExtractor bound to this document module.
+Get the NL2SQL manager instance from the SchemaExtractor bound to this document module. Can be used to construct a SqlCall.
 
 **Returns:**\\n
 - SqlManager: The SQL manager instance.
 """)
 
 add_chinese_doc('Document.extract_db_schema', """\
-.. deprecated:: 请使用 ``SchemaExtractor.analyze_schema_and_register()``。
-
-基于文档数据集和大语言模型自动提取数据库表模式（schema）。
+基于文档数据集和大语言模型自动提取数据库表模式（schema）并注册。
 
 Args:
-    llm (Union[OnlineChatModule, TrainableModule], optional): 已废弃，使用 SchemaExtractor 自带的 LLM。
+    llm (Union[OnlineChatModule, TrainableModule], optional): 用于 schema 分析的 LLM，默认使用 SchemaExtractor 自带的 LLM。
     print_schema (bool, optional): 是否在日志中打印提取的 schema。默认为 ``False``。
 """)
 
 add_english_doc('Document.extract_db_schema', """\
-.. deprecated:: Use ``SchemaExtractor.analyze_schema_and_register()``.
-
-Extract the database schema from the dataset using the SchemaExtractor's LLM.
+Extract the database schema from the dataset using the SchemaExtractor's LLM and register it.
 
 Args:
-    llm (Union[OnlineChatModule, TrainableModule], optional): Deprecated, uses the SchemaExtractor's built-in LLM.
+    llm (Union[OnlineChatModule, TrainableModule], optional): LLM for schema analysis; defaults to the SchemaExtractor's built-in LLM.
     print_schema (bool, optional): Whether to log the extracted schema. Defaults to ``False``.
 """)
 
 add_chinese_doc('Document.update_database', """\
-.. deprecated:: 请使用 ``SchemaExtractor.forward()`` 或 ``extract_and_store()``。
-
 使用 SchemaExtractor 解析文档并将提取的信息更新到数据库。
 
 Args:
-    llm (Union[OnlineChatModule, TrainableModule], optional): 已废弃，使用 SchemaExtractor 自带的 LLM。
+    llm (Union[OnlineChatModule, TrainableModule], optional): 用于信息抽取的 LLM，默认使用 SchemaExtractor 自带的 LLM。
 """)
 
 add_english_doc('Document.update_database', """\
-.. deprecated:: Use ``SchemaExtractor.forward()`` or ``extract_and_store()``.
-
 Update the database with information extracted from documents using the SchemaExtractor.
 
 Args:
-    llm (Union[OnlineChatModule, TrainableModule], optional): Deprecated, uses the SchemaExtractor's built-in LLM.
+    llm (Union[OnlineChatModule, TrainableModule], optional): LLM for extraction; defaults to the SchemaExtractor's built-in LLM.
 """)
 
 add_chinese_doc('Document.create_kb_group', """\
@@ -6426,35 +6414,6 @@ Args:
 - tuple[bool, str]: 第一个元素表示是否成功提取，第二个是清洗后的或原始内容。如果提供了 sql_post_func，则会应用于提取结果。
 ''')
 
-add_english_doc('SqlCall.create_from_document', '''\
-Build a `SqlCall` tool directly from a `Document` that already has a bound `SchemaExtractor`. It reuses the extractor’s NL2SQL `SqlManager` and LLM so you can generate and execute SQL against the document’s registered schemas.
-
-Args:
-    document (Document): A Document instance with an attached SchemaExtractor (schema-aware Document).
-    llm (optional): Override LLM for SQL generation/answering; defaults to the extractor’s LLM.
-    sql_examples (str, optional): Few-shot examples appended to the schema description to guide SQL generation.
-    sql_post_func (Callable, optional): Post-processor applied to the extracted SQL/pipeline before execution.
-    use_llm_for_sql_result (bool, optional): Whether to ask the LLM to explain query results; default True.
-    return_trace (bool, optional): Whether to return pipeline trace; default False.
-
-**Returns:**\n
-- SqlCall: Configured SqlCall instance tied to the Document’s schema tables.
-''')
-
-add_chinese_doc('SqlCall.create_from_document', '''\
-基于已绑定 SchemaExtractor 的 Document 创建 SqlCall，复用其 NL2SQL SqlManager 和 LLM，可直接面向文档注册的 schema 生成/执行 SQL。
-
-Args:
-    document (Document): 具备 SchemaExtractor 的文档实例。
-    llm (optional): 覆盖用于 SQL 生成/结果说明的 LLM，默认复用文档的 LLM。
-    sql_examples (str, optional): 追加在 schema 描述后的 few-shot 示例，指导 SQL 生成。
-    sql_post_func (Callable, optional): 对提取的 SQL/管道做后处理的函数。
-    use_llm_for_sql_result (bool, optional): 是否用 LLM 解释查询结果，默认 True。
-    return_trace (bool, optional): 是否返回流水线 trace，默认 False。
-
-**Returns:**\n
-- SqlCall: 绑定到该 Document schema 表的 SqlCall 实例。
-''')
 
 # ---------------------------------------------------------------------------- #
 

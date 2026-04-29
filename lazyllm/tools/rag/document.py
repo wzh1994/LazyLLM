@@ -383,14 +383,12 @@ class Document(ModuleBase, BuiltinGroups, metaclass=_MetaDocument):
             'connect_sql_manager is removed. Use SchemaExtractor with register_schema_set instead.'
         )
 
-    @deprecated('Use SchemaExtractor.sql_manager_for_nl2sql()')
     def get_sql_manager(self):
         ext = self._schema_extractor
         if ext is None:
             raise ValueError('No schema extractor configured for this Document')
         return ext.sql_manager_for_nl2sql()
 
-    @deprecated('Use SchemaExtractor.analyze_schema_and_register()')
     def extract_db_schema(
         self, llm: Union[OnlineChatModule, TrainableModule] = None, print_schema: bool = False
     ):
@@ -403,7 +401,6 @@ class Document(ModuleBase, BuiltinGroups, metaclass=_MetaDocument):
             lazyllm.LOG.info(f'Extracted Schema:\n\t{result}\n')
         return result
 
-    @deprecated('Use SchemaExtractor.forward() or extract_and_store()')
     def update_database(self, llm: Union[OnlineChatModule, TrainableModule] = None):
         ext = self._schema_extractor
         if ext is None:
@@ -429,7 +426,7 @@ class Document(ModuleBase, BuiltinGroups, metaclass=_MetaDocument):
 
     @property
     def _schema_extractor(self):
-        # Compat shim for pre-refactor callers (e.g. ``SqlCall.create_from_document``);
+        # Compat shim: read through the active DocImpl so shared-manager KBs keep per-group values.
         # read through the active DocImpl so shared-manager KBs keep per-group values.
         impl = self._manager.get_doc_by_kb_group(self._curr_group)
         return getattr(impl, '_schema_extractor', None)

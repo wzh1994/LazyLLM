@@ -69,6 +69,6 @@ class TestSchemaExtractor(unittest.TestCase):
         )
         doc.register_schema_set(schema_set=TestSchema, force_refresh=True)
         doc.start()
-        sqlcall = SqlCall.create_from_document(document=doc, llm=self.llm.share())
+        sqlcall = SqlCall(llm=self.llm.share(), sql_manager=doc.get_sql_manager())
         result = sqlcall('what is the profit of Tesla?')
         assert '14.997' in result
