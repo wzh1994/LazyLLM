@@ -1,5 +1,5 @@
 # Copyright (c) 2026 LazyAGI. All rights reserved.
-"""Tests for dep_checker: import extraction, cycle detection, inversion detection."""
+'''Tests for dep_checker: import extraction, cycle detection, inversion detection.'''
 import os
 import tempfile
 import textwrap
@@ -7,7 +7,7 @@ import unittest
 
 
 class TestPythonExtractor(unittest.TestCase):
-    """Test Python import extraction (AST + regex fallback)."""
+    '''Test Python import extraction (AST + regex fallback).'''
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -70,7 +70,7 @@ class TestPythonExtractor(unittest.TestCase):
 
 
 class TestJsExtractor(unittest.TestCase):
-    """Test JS/TS import extraction."""
+    '''Test JS/TS import extraction.'''
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -115,7 +115,7 @@ class TestJsExtractor(unittest.TestCase):
 
 
 class TestGoExtractor(unittest.TestCase):
-    """Test Go import extraction."""
+    '''Test Go import extraction.'''
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -160,7 +160,7 @@ class TestGoExtractor(unittest.TestCase):
 
 
 class TestJavaExtractor(unittest.TestCase):
-    """Test Java import extraction."""
+    '''Test Java import extraction.'''
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -192,7 +192,7 @@ class TestJavaExtractor(unittest.TestCase):
 
 
 class TestCycleDetection(unittest.TestCase):
-    """Test cycle detection at file and module level."""
+    '''Test cycle detection at file and module level.'''
 
     def test_simple_cycle(self):
         from lazyllm.tools.git.review.dep_checker import _find_cycles_dfs
@@ -249,7 +249,7 @@ class TestCycleDetection(unittest.TestCase):
 
 
 class TestModuleAggregation(unittest.TestCase):
-    """Test module-level graph aggregation."""
+    '''Test module-level graph aggregation.'''
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -281,7 +281,7 @@ class TestModuleAggregation(unittest.TestCase):
 
 
 class TestInversionDetection(unittest.TestCase):
-    """Test dependency inversion detection."""
+    '''Test dependency inversion detection.'''
 
     def test_heuristic_inversion(self):
         from lazyllm.tools.git.review.dep_checker import detect_inversions
@@ -320,7 +320,7 @@ class TestInversionDetection(unittest.TestCase):
 
 
 class TestRunDepAnalysis(unittest.TestCase):
-    """Integration test for _run_dep_analysis."""
+    '''Integration test for _run_dep_analysis.'''
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -365,7 +365,7 @@ class TestRunDepAnalysis(unittest.TestCase):
 
 
 class TestMultiLineMerge(unittest.TestCase):
-    """Test that multiple imports to the same target are merged into one issue."""
+    '''Test that multiple imports to the same target are merged into one issue.'''
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()

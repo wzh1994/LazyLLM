@@ -29,7 +29,7 @@ class ImportEdge:
 def _resolve_python_import(
     source_file: str, module: Optional[str], level: int, clone_dir: str,
 ) -> Optional[str]:
-    """Resolve a Python import to a relative file path under clone_dir."""
+    '''Resolve a Python import to a relative file path under clone_dir.'''
     if level > 0:
         # relative import
         source_dir = os.path.dirname(os.path.join(clone_dir, source_file))
@@ -57,7 +57,7 @@ def _resolve_python_import(
 
 
 def _resolve_js_import(source_file: str, raw_path: str, clone_dir: str) -> Optional[str]:
-    """Resolve a JS/TS import path to a relative file path under clone_dir."""
+    '''Resolve a JS/TS import path to a relative file path under clone_dir.'''
     if not raw_path.startswith('.'):
         return None  # node_modules / bare specifier
     source_dir = os.path.dirname(os.path.join(clone_dir, source_file))
@@ -79,7 +79,7 @@ def _resolve_js_import(source_file: str, raw_path: str, clone_dir: str) -> Optio
 
 
 def _resolve_go_import(raw_path: str, clone_dir: str) -> Optional[str]:
-    """Resolve a Go import path using go.mod module prefix."""
+    '''Resolve a Go import path using go.mod module prefix.'''
     go_mod = os.path.join(clone_dir, 'go.mod')
     if not os.path.isfile(go_mod):
         return None
@@ -103,7 +103,7 @@ def _resolve_go_import(raw_path: str, clone_dir: str) -> Optional[str]:
 
 
 def _resolve_java_import(raw_path: str, clone_dir: str) -> Optional[str]:
-    """Resolve a Java import (com.foo.Bar) to a file path."""
+    '''Resolve a Java import (com.foo.Bar) to a file path.'''
     parts = raw_path.split('.')
     if not parts:
         return None
@@ -145,7 +145,7 @@ def _extract_from_ast(tree: ast.AST, file_path: str, clone_dir: str) -> List[Imp
 
 
 _PYTHON_IMPORT_RE = re.compile(
-    r'^\s*(?:from\s+(\.{0,3}\S+)\s+import\s+(.+)|import\s+(\S+))', re.MULTILINE,
+    r'^\s*(?:from\s+(\.?\.?\.?\S+)\s+import\s+(.+)|import\s+(\S+))', re.MULTILINE,
 )
 
 
@@ -266,7 +266,7 @@ _IMPORT_EXTRACTORS: Dict[str, Callable[..., List[ImportEdge]]] = {
 # ---------------------------------------------------------------------------
 
 def _parse_changed_files(diff_text: str) -> List[str]:
-    """Extract list of changed file paths from unified diff."""
+    '''Extract list of changed file paths from unified diff.'''
     files: List[str] = []
     for line in diff_text.splitlines():
         if line.startswith('+++ b/'):
@@ -275,8 +275,8 @@ def _parse_changed_files(diff_text: str) -> List[str]:
 
 
 def _extract_new_import_lines(diff_text: str) -> Dict[str, List[Tuple[int, str]]]:
-    """Extract added import lines from diff, grouped by file.
-    Returns {file_path: [(approx_line_no, line_content), ...]}."""
+    '''Extract added import lines from diff, grouped by file.
+    Returns {file_path: [(approx_line_no, line_content), ...]}.'''
     result: Dict[str, List[Tuple[int, str]]] = {}
     current_file = ''
     current_line = 0
@@ -315,7 +315,7 @@ def _get_extractor(file_path: str) -> Optional[Callable[..., List[ImportEdge]]]:
 def _extract_edges_for_file(
     file_path: str, clone_dir: str,
 ) -> List[ImportEdge]:
-    """Read a file and extract all its import edges."""
+    '''Read a file and extract all its import edges.'''
     extractor = _get_extractor(file_path)
     if not extractor:
         return []
@@ -333,13 +333,13 @@ def build_dep_graph(
     diff_text: str,
     clone_dir: str,
 ) -> Tuple[Dict[str, Set[str]], Set[Tuple[str, str]], Dict[Tuple[str, str], List[ImportEdge]]]:
-    """Build a local dependency graph from diff-changed files + 1-hop neighbors.
+    '''Build a local dependency graph from diff-changed files + 1-hop neighbors.
 
     Returns:
         graph: adjacency dict {node: set_of_targets}
         new_edges: edges introduced by this PR (source, target)
         edge_details: maps (source, target) to ImportEdge list for issue reporting
-    """
+    '''
     changed_files = _parse_changed_files(diff_text)
     new_import_lines = _extract_new_import_lines(diff_text)
 
@@ -393,9 +393,9 @@ def build_dep_graph(
 # --- 3a. Module-level aggregation ---
 
 def _infer_module_for_file(file_path: str, clone_dir: str) -> str:
-    """Infer the module (package directory) a file belongs to.
+    '''Infer the module (package directory) a file belongs to.
     Walks up from the file's directory looking for __init__.py (Python),
-    package.json (JS), or go.mod (Go). Falls back to parent directory."""
+    package.json (JS), or go.mod (Go). Falls back to parent directory.'''
     parts = file_path.replace('\\', '/').split('/')
     if len(parts) <= 1:
         return file_path
@@ -414,8 +414,8 @@ def aggregate_to_module_graph(
     file_graph: Dict[str, Set[str]],
     clone_dir: str,
 ) -> Tuple[Dict[str, Set[str]], Dict[str, str]]:
-    """Aggregate file-level graph to module-level graph.
-    Returns (module_graph, file_to_module_map)."""
+    '''Aggregate file-level graph to module-level graph.
+    Returns (module_graph, file_to_module_map).'''
     file_to_mod: Dict[str, str] = {}
     for node in file_graph:
         file_to_mod[node] = _infer_module_for_file(node, clone_dir)
@@ -442,7 +442,7 @@ def _find_cycles_dfs(
     new_edges: Set[Tuple[str, str]],
     max_length: int = _MAX_CYCLE_LENGTH,
 ) -> List[List[str]]:
-    """Find all simple cycles up to max_length that contain at least one new_edge."""
+    '''Find all simple cycles up to max_length that contain at least one new_edge.'''
     cycles: List[List[str]] = []
     visited_cycles: Set[Tuple[str, ...]] = set()
 
@@ -488,8 +488,8 @@ def detect_cycles(
     new_edges: Set[Tuple[str, str]],
     clone_dir: str,
 ) -> Tuple[List[List[str]], List[List[str]]]:
-    """Detect cycles at both module and file level.
-    Returns (module_cycles, file_cycles)."""
+    '''Detect cycles at both module and file level.
+    Returns (module_cycles, file_cycles).'''
     # module-level
     mod_graph, file_to_mod = aggregate_to_module_graph(file_graph, clone_dir)
     mod_new_edges = {
@@ -526,7 +526,7 @@ class _LayerDef:
 
 
 def _load_layer_config(clone_dir: str) -> Optional[List[_LayerDef]]:
-    """Load .dep-layers.yaml from project root if it exists."""
+    '''Load .dep-layers.yaml from project root if it exists.'''
     for fname in ('.dep-layers.yaml', '.dep-layers.yml'):
         fpath = os.path.join(clone_dir, fname)
         if not os.path.isfile(fpath):
@@ -568,7 +568,7 @@ _HEURISTIC_LAYERS: Dict[str, int] = {
 def _get_level_for_path(
     file_path: str, layer_config: Optional[List[_LayerDef]],
 ) -> Optional[int]:
-    """Get the layer level for a file path."""
+    '''Get the layer level for a file path.'''
     if layer_config:
         for layer in layer_config:
             for prefix in layer.paths:
@@ -591,8 +591,8 @@ def detect_inversions(
     clone_dir: str,
     arch_doc: str = '',
 ) -> List[Dict[str, Any]]:
-    """Detect dependency inversions: lower-layer importing higher-layer.
-    Only reports inversions on new edges."""
+    '''Detect dependency inversions: lower-layer importing higher-layer.
+    Only reports inversions on new edges.'''
     layer_config = _load_layer_config(clone_dir)
     issues: List[Dict[str, Any]] = []
 
@@ -620,8 +620,8 @@ def _format_cycle_issue(
     new_edges: Set[Tuple[str, str]],
     severity: str, is_module_level: bool,
 ) -> Dict[str, Any]:
-    """Format a cycle into a standard review issue dict.
-    Pins the issue to the new_edge import line(s), merging multiple lines."""
+    '''Format a cycle into a standard review issue dict.
+    Pins the issue to the new_edge import line(s), merging multiple lines.'''
     cycle_str = ' -> '.join(cycle)
     level_label = 'Module' if is_module_level else 'File'
     n = len(cycle) - 1
@@ -661,8 +661,8 @@ def _format_cycle_issue(
         'bug_category': 'design',
         'problem': f'{level_label}-level circular dependency ({n} nodes): {cycle_str}{line_note}',
         'suggestion': (
-            f'Break the cycle by extracting shared interfaces/types into a separate module, '
-            f'or use dependency injection / lazy imports to decouple the modules.'
+            'Break the cycle by extracting shared interfaces/types into a separate module, '
+            'or use dependency injection / lazy imports to decouple the modules.'
         ),
         'source': 'dep_check',
     }
@@ -672,8 +672,8 @@ def _format_inversion_issue(
     src: str, tgt: str, src_level: int, tgt_level: int,
     all_edges: List[ImportEdge],
 ) -> Dict[str, Any]:
-    """Format an inversion into a standard review issue dict.
-    Merges multiple import lines of the same (src, tgt) pair into one issue."""
+    '''Format an inversion into a standard review issue dict.
+    Merges multiple import lines of the same (src, tgt) pair into one issue.'''
     lines = sorted({e.line for e in all_edges})
     primary_line = lines[0]
     if len(lines) > 1:
@@ -692,11 +692,62 @@ def _format_inversion_issue(
             f'Lower-layer modules should not depend on higher-layer modules.{line_note}'
         ),
         'suggestion': (
-            f'Move the shared logic into a lower layer, or define an interface/protocol '
-            f'in the lower layer that the higher layer implements.'
+            'Move the shared logic into a lower layer, or define an interface/protocol '
+            'in the lower layer that the higher layer implements.'
         ),
         'source': 'dep_check',
     }
+
+
+def _collect_cycle_issues(
+    graph: Dict[str, Set[str]],
+    new_edges: Set[Tuple[str, str]],
+    edge_details: Dict[Tuple[str, str], List[ImportEdge]],
+    clone_dir: str,
+) -> List[Dict[str, Any]]:
+    '''Run cycle detection and return formatted issues.'''
+    issues = []
+    mod_cycles, file_cycles = detect_cycles(graph, new_edges, clone_dir)
+    for cycle in mod_cycles:
+        issues.append(_format_cycle_issue(cycle, edge_details, new_edges, 'medium', True))
+    for cycle in file_cycles:
+        issues.append(_format_cycle_issue(cycle, edge_details, new_edges, 'normal', False))
+    return issues
+
+
+def _collect_inversion_issues(
+    graph: Dict[str, Set[str]],
+    new_edges: Set[Tuple[str, str]],
+    edge_details: Dict[Tuple[str, str], List[ImportEdge]],
+    clone_dir: str,
+    arch_doc: str,
+) -> List[Dict[str, Any]]:
+    '''Run inversion detection and return formatted issues, merged by (src, tgt) pair.'''
+    issues = []
+    inversions = detect_inversions(graph, new_edges, clone_dir, arch_doc)
+    inv_groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for inv in inversions:
+        key = (inv['source'], inv['target'])
+        if key not in inv_groups:
+            inv_groups[key] = inv
+    for (src, tgt), inv in inv_groups.items():
+        all_edges = edge_details.get((src, tgt), [])
+        if not all_edges:
+            all_edges = [ImportEdge(source=src, target=tgt, symbol='', line=1)]
+        issues.append(_format_inversion_issue(src, tgt, inv['src_level'], inv['tgt_level'], all_edges))
+    return issues
+
+
+def _dedup_issues(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    '''Remove duplicate issues with the same (path, line) location.'''
+    seen: Set[Tuple[str, int]] = set()
+    result = []
+    for issue in issues:
+        key = (issue.get('path', ''), issue.get('line', 0))
+        if key not in seen:
+            seen.add(key)
+            result.append(issue)
+    return result
 
 
 def _run_dep_analysis(
@@ -704,8 +755,8 @@ def _run_dep_analysis(
     clone_dir: str,
     arch_doc: str = '',
 ) -> List[Dict[str, Any]]:
-    """Main entry point: run dependency cycle and inversion analysis.
-    Returns a list of standard review issue dicts."""
+    '''Main entry point: run dependency cycle and inversion analysis.
+    Returns a list of standard review issue dicts.'''
     if not diff_text or not clone_dir:
         return []
 
@@ -718,45 +769,17 @@ def _run_dep_analysis(
     if not new_edges:
         return []
 
-    issues: List[Dict[str, Any]] = []
-    seen_locations: Set[Tuple[str, int]] = set()  # (path, line) dedup
-
-    def _add_issue(issue: Dict[str, Any]) -> None:
-        key = (issue.get('path', ''), issue.get('line', 0))
-        if key in seen_locations:
-            return
-        seen_locations.add(key)
-        issues.append(issue)
-
-    # cycle detection
+    raw: List[Dict[str, Any]] = []
     try:
-        mod_cycles, file_cycles = detect_cycles(graph, new_edges, clone_dir)
-        for cycle in mod_cycles:
-            _add_issue(_format_cycle_issue(cycle, edge_details, new_edges, 'medium', True))
-        for cycle in file_cycles:
-            _add_issue(_format_cycle_issue(cycle, edge_details, new_edges, 'normal', False))
+        raw.extend(_collect_cycle_issues(graph, new_edges, edge_details, clone_dir))
     except Exception as e:
         lazyllm.LOG.warning(f'Cycle detection failed: {e}')
-
-    # inversion detection — aggregate by (source, target) pair
     try:
-        inversions = detect_inversions(graph, new_edges, clone_dir, arch_doc)
-        # group inversions by (source, target) and collect all import edges
-        inv_groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
-        for inv in inversions:
-            key = (inv['source'], inv['target'])
-            if key not in inv_groups:
-                inv_groups[key] = inv
-        for (src, tgt), inv in inv_groups.items():
-            all_edges = edge_details.get((src, tgt), [])
-            if not all_edges:
-                all_edges = [ImportEdge(source=src, target=tgt, symbol='', line=1)]
-            _add_issue(_format_inversion_issue(
-                src, tgt, inv['src_level'], inv['tgt_level'], all_edges,
-            ))
+        raw.extend(_collect_inversion_issues(graph, new_edges, edge_details, clone_dir, arch_doc))
     except Exception as e:
         lazyllm.LOG.warning(f'Inversion detection failed: {e}')
 
+    issues = _dedup_issues(raw)
     if issues:
         lazyllm.LOG.info(f'Dep analysis: {len(issues)} issue(s) found')
     return issues

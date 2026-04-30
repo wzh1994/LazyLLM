@@ -63,6 +63,35 @@ def _sample_text(text: str, max_chars: int) -> str:
 _JSON_OUTPUT_INSTRUCTION = JSON_OUTPUT_INSTRUCTION
 _JSON_OBJ_OUTPUT_INSTRUCTION = JSON_OBJ_OUTPUT_INSTRUCTION
 
+
+def _escape_braces(text: str) -> str:
+    '''Escape curly braces in user/code content so str.format() won't interpret them.'''
+    return text.replace('{', '{{').replace('}', '}}')
+
+
+# Sentinel tokens unlikely to appear in any template or code content.
+_LBRACE_SENTINEL = '\x00__LB__\x00'
+_RBRACE_SENTINEL = '\x00__RB__\x00'
+
+
+def _safe_format(template: str, **kwargs: Any) -> str:
+    '''Template substitution immune to braces in parameter values.
+
+    Strategy:
+    1. Protect template literal braces ({{ / }}) with sentinels.
+    2. Replace placeholders via str.replace — values can contain {{ }} safely.
+    3. Restore sentinels back to literal {{ }}.
+    '''
+    # Step 1: protect literal {{ / }}
+    protected = template.replace('{{', _LBRACE_SENTINEL).replace('}}', _RBRACE_SENTINEL)
+    # Step 2: replace placeholders via simple str.replace (no format interpretation)
+    for key, val in kwargs.items():
+        placeholder = '{' + key + '}'
+        protected = protected.replace(placeholder, str(val))
+    # Step 3: restore literal braces
+    result = protected.replace(_LBRACE_SENTINEL, '{').replace(_RBRACE_SENTINEL, '}')
+    return result
+
 _R1_CATEGORIES_BLOCK = '''\
 Categories:
 - logic: boundary conditions, null values, wrong branches
@@ -281,7 +310,8 @@ Rules for review_focus:
 def _extract_code_tags(
     llm: Any, skeleton: str, diff_excerpt: str, max_focus: int = 5,
 ) -> Dict[str, Any]:
-    prompt = _CODE_TAG_PROMPT_TMPL.format(
+    prompt = _safe_format(
+        _CODE_TAG_PROMPT_TMPL,
         skeleton=skeleton[:2000] if skeleton else '(not available)',
         diff_excerpt=diff_excerpt[:1500] if diff_excerpt else '(not available)',
         max_focus=max_focus,
@@ -444,7 +474,8 @@ def _analyze_single_hunk(
         sym_notes = _lookup_relevant_symbols(annotated_content, symbol_index)
         if sym_notes:
             effective_arch = f'{arch_snippet}\n\nKey utilities in this diff:\n{sym_notes}'
-    prompt = _ROUND1_PROMPT_TMPL.format(
+    prompt = _safe_format(
+        _ROUND1_PROMPT_TMPL,
         lang_instruction=_language_instruction(language),
         pr_summary=summary_snippet, agent_instructions=agent_instructions or '(not available)',
         arch_doc=effective_arch, review_spec=spec_snippet,
@@ -496,7 +527,8 @@ def _analyze_large_hunk(
             sym_notes = _lookup_relevant_symbols(win_annotated, symbol_index)
             if sym_notes:
                 effective_arch = f'{arch_snippet}\n\nKey utilities in this diff:\n{sym_notes}'
-        prompt = _ROUND1_PROMPT_TMPL.format(
+        prompt = _safe_format(
+            _ROUND1_PROMPT_TMPL,
             lang_instruction=_language_instruction(language),
             pr_summary=summary_snippet, agent_instructions=agent_instructions or '(not available)',
             arch_doc=effective_arch, review_spec=spec_snippet,
@@ -576,7 +608,8 @@ def _analyze_hunk_batch(
         f'{_annotate_diff_with_line_numbers(_truncate_hunk_content(cnt, hunk_budget_lines), s)}\n</hunk>'
         for s, c, cnt in hunks
     ]
-    prompt = _ROUND1_BATCH_PROMPT_TMPL.format(
+    prompt = _safe_format(
+        _ROUND1_BATCH_PROMPT_TMPL,
         lang_instruction=_language_instruction(language),
         pr_summary=summary_snippet, agent_instructions=agent_instructions or '(not available)',
         arch_doc=effective_arch, review_spec=spec_snippet,
@@ -1040,7 +1073,8 @@ def _r3_group_review(
     arch_snippet = clip_text(arch_doc or '', 4000)
     density_rule = issue_density_rule(files_block)
 
-    prompt = _ROUND3_GROUP_PROMPT_TMPL.format(
+    prompt = _safe_format(
+        _ROUND3_GROUP_PROMPT_TMPL,
         lang_instruction=_language_instruction(language),
         pr_summary=pr_summary[:600] if pr_summary else '(not available)',
         agent_instructions=agent_instructions[:400] if agent_instructions else '',
@@ -1710,7 +1744,8 @@ def _r3_build_file_context(
     llm: Any, path: str, diff_chunk: str, clone_dir: str, tools: List[Any],
     language: str = 'cn', agent_instructions: str = '',
 ) -> str:
-    prompt = _R3_CONTEXT_COLLECT_PROMPT_TMPL.format(
+    prompt = _safe_format(
+        _R3_CONTEXT_COLLECT_PROMPT_TMPL,
         path=path, diff_chunk=diff_chunk[:8000],
         agent_instructions=agent_instructions or '(not available)',
         lang_instruction=_language_instruction(language),
@@ -1776,7 +1811,8 @@ def _r3_extract_issues(
     sym_trimmed = _r3_trim_rich_context(symbol_context, _R3_SYMBOL_CONTEXT_MAX) if symbol_context else ''
     skel_trimmed = _r3_trim_skeleton(file_skeleton, diff_chunk, _R3_FILE_SKELETON_MAX) if file_skeleton else ''
     shared_trimmed = _r3_trim_shared_context(shared_context, _R3_SHARED_CTX_BUDGET) if shared_context else ''
-    prompt = _R3_ISSUE_EXTRACT_PROMPT_TMPL.format(
+    prompt = _safe_format(
+        _R3_ISSUE_EXTRACT_PROMPT_TMPL,
         lang_instruction=_language_instruction(language),
         pr_summary=(pr_summary or '')[:_R3_SUMMARY_BUDGET],
         agent_instructions=agent_instructions or '(not available)',
@@ -1987,7 +2023,8 @@ def _round2_generate_pr_doc(
     prog = _Progress('Round 2a: generating PR design document')
     diff_use = clip_diff_by_hunk_budget(diff_text, SINGLE_CALL_CONTEXT_BUDGET - 22000)
     arch_use = clip_text(arch_doc or '', 12000) if arch_doc else '(not available)'
-    prompt = _ROUND2_DOC_PROMPT_TMPL.format(
+    prompt = _safe_format(
+        _ROUND2_DOC_PROMPT_TMPL,
         lang_instruction=_language_instruction(language),
         arch_doc=arch_use,
         pr_summary=pr_summary[:800] if pr_summary else '(not available)',
@@ -2186,7 +2223,8 @@ def _round2_architect_review(
     diff_use = clip_diff_by_hunk_budget(diff_text, SINGLE_CALL_CONTEXT_BUDGET - 38000)
     arch_use = clip_text(arch_doc or '', 42000) if arch_doc else '(not available)'
     annotated_diff = _annotate_full_diff(diff_use)
-    prompt = _ROUND2_ARCHITECT_PROMPT_TMPL.format(
+    prompt = _safe_format(
+        _ROUND2_ARCHITECT_PROMPT_TMPL,
         lang_instruction=_language_instruction(language),
         agent_instructions=agent_instructions or '(not available)',
         arch_doc=arch_use, review_spec=review_spec[:4000] if review_spec else '(not available)',
@@ -2321,7 +2359,8 @@ def _rmod_run_single_file(
 ) -> List[Dict[str, Any]]:
     annotated = _annotate_full_diff(file_diff)
     arch_use = clip_text(arch_doc or '', 12000) if arch_doc else '(not available)'
-    prompt = _RMOD_PROMPT_TMPL.format(
+    prompt = _safe_format(
+        _RMOD_PROMPT_TMPL,
         lang_instruction=_language_instruction(language),
         pr_design_doc=clip_text(pr_design_doc, 8000) if pr_design_doc else '(not available)',
         arch_doc=arch_use,
@@ -2518,7 +2557,8 @@ def _rscene_run_single_group(
     compressed_diff = compress_diff_for_agent_heuristic(diff_text, _RSCENE_DIFF_BUDGET)
     arch_snippet = _extract_arch_for_file(arch_doc, anchor or files[0], max_chars=4000) if arch_doc else ''
 
-    prompt = _RSCENE_PROMPT_TMPL.format(
+    prompt = _safe_format(
+        _RSCENE_PROMPT_TMPL,
         lang_instruction=_language_instruction(language),
         pr_summary=pr_summary[:600] if pr_summary else '(not available)',
         compressed_diff=compressed_diff,
@@ -2854,7 +2894,8 @@ def _rchain_run_single_scenario(
     all_issues: List[Dict[str, Any]] = []
     for chunk_label, diff_chunk in all_chunks:
         annotated = _annotate_full_diff(diff_chunk)
-        prompt = _RCHAIN_PROMPT_TMPL.format(
+        prompt = _safe_format(
+            _RCHAIN_PROMPT_TMPL,
             lang_instruction=_language_instruction(language),
             scenario_title=title,
             scenario_description=scenario.get('description', ''),
@@ -2983,7 +3024,8 @@ def _batch_llm_summarize(
     llm: Any, items: List[Dict[str, Any]], body_key: str, label: str
 ) -> Dict[int, str]:
     batch_input = [{'idx': item['idx'], body_key: item[body_key][:800]} for item in items]
-    prompt = _COMPRESS_COMMENTS_PROMPT_TMPL.format(
+    prompt = _safe_format(
+        _COMPRESS_COMMENTS_PROMPT_TMPL,
         items_json=json.dumps(batch_input, ensure_ascii=False, indent=2)
     )
     summaries: Dict[int, str] = {}
@@ -3145,7 +3187,8 @@ def _round4_merge_and_deduplicate(
     compressed_new = _compress_new_issues(llm, deduped)
     existing_json = json.dumps(_compress_existing_comments(llm, existing_comments), ensure_ascii=False, indent=2) \
         if existing_comments else '(none)'
-    prompt = _ROUND4_DEDUP_PROMPT_TMPL.format(
+    prompt = _safe_format(
+        _ROUND4_DEDUP_PROMPT_TMPL,
         lang_instruction=_language_instruction(language),
         new_issues_json=json.dumps(compressed_new, ensure_ascii=False, indent=2),
         existing_json=existing_json,
@@ -3454,7 +3497,8 @@ def _post_merge_dedup(
 
     # compress for LLM prompt — LLM decides dedup/merge/keep, no pre-filtering by severity
     compressed = _compress_new_issues(llm, all_in)
-    prompt = _POST_MERGE_DEDUP_PROMPT_TMPL.format(
+    prompt = _safe_format(
+        _POST_MERGE_DEDUP_PROMPT_TMPL,
         lang_instruction=_language_instruction(language),
         issues_json=json.dumps(compressed, ensure_ascii=False, indent=2),
     )

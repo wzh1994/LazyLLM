@@ -41,8 +41,8 @@ def _filter_commentable(
     # Split comments into inline (valid path+line in diff) and general (no line or line not in diff).
     # Returns (inline_kept, general_kept, dropped_count).
     # - line is None → general comment (intentional, e.g. coverage issues)
-    # - line not in diff → drop (hallucinated line number)
-    inline, general, dropped = [], [], 0
+    # - line not in diff → demote to general (preserve the review insight)
+    inline, general = [], []
     for c in comments:
         path = c.get('path', '')
         line = c.get('line')
@@ -52,15 +52,14 @@ def _filter_commentable(
         allowed = commentable.get(path)
         if allowed is None or int(line) not in allowed:
             source = c.get('source') or 'unknown'
-            lazyllm.LOG.error(
-                f'[FILTER] dropping comment: {path}:{line} not in PR diff '
-                f'(source={source}) — '
-                f'line does not correspond to any added/context line in the diff'
+            lazyllm.LOG.warning(
+                f'[DEMOTE] comment {path}:{line} not in PR diff '
+                f'(source={source}) — demoted to general comment'
             )
-            dropped += 1
+            general.append(c)
         else:
             inline.append(c)
-    return inline, general, dropped
+    return inline, general, 0
 
 
 def _suggestion_prefix(suggestion: str) -> str:
@@ -133,6 +132,41 @@ def _submit_with_retry(
     return False
 
 
+def _build_general_body(general_comments: List[Dict[str, Any]]) -> str:
+    '''Build a grouped markdown body from general (non-inline) comments.'''
+    from collections import OrderedDict
+    by_file: OrderedDict = OrderedDict()
+    no_file: list = []
+    for c in general_comments:
+        path = c.get('path', '')
+        if path:
+            by_file.setdefault(path, []).append(c)
+        else:
+            no_file.append(c)
+
+    parts: list = ['## General Review Comments\n']
+    for path, items in by_file.items():
+        parts.append(f'### `{path}`\n')
+        for c in items:
+            category_tag = f'[{c.get("bug_category", "maintainability")}]'
+            severity_tag = f'[{c.get("severity", "normal")}]'
+            line_hint = f' (line {c["line"]})' if c.get('line') else ''
+            parts.append(
+                f'**{severity_tag} {category_tag}**{line_hint} {c.get("problem", "")}\n\n'
+                f'**Suggestion:** {c.get("suggestion", "")}\n\n---'
+            )
+    if no_file:
+        parts.append('### Other\n')
+        for c in no_file:
+            category_tag = f'[{c.get("bug_category", "maintainability")}]'
+            severity_tag = f'[{c.get("severity", "normal")}]'
+            parts.append(
+                f'**{severity_tag} {category_tag}** {c.get("problem", "")}\n\n'
+                f'**Suggestion:** {c.get("suggestion", "")}\n\n---'
+            )
+    return '\n'.join(parts)
+
+
 def _post_review_comments(
     backend: LazyLLMGitBase,
     pr_number: int,
@@ -156,18 +190,10 @@ def _post_review_comments(
     if dropped:
         lazyllm.LOG.warning(f'{dropped} comment(s) dropped: missing path or line field')
 
-    # Build general (PR-level) review body from general_comments
-    general_body_parts = []
+    # Build general (PR-level) review body from general_comments, grouped by file
+    general_body_parts: list = []
     if general_comments:
-        general_body_parts.append('## General Review Comments')
-        for c in general_comments:
-            path_hint = f'`{c["path"]}`  ' if c.get('path') else ''
-            category_tag = f'[{c.get("bug_category", "maintainability")}]'
-            severity_tag = f'[{c.get("severity", "normal")}]'
-            general_body_parts.append(
-                f'**{severity_tag} {category_tag}** {path_hint}{c.get("problem", "")}\n\n'
-                f'**Suggestion:** {c.get("suggestion", "")}\n\n---'
-            )
+        general_body_parts.append(_build_general_body(general_comments))
     general_body = '\n'.join(general_body_parts)
 
     if not comments_payload and not general_body:
