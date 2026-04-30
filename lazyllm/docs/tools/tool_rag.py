@@ -4117,6 +4117,24 @@ Args:
     reader (DirectoryReader): The file reader instance used to read file contents during document processing tasks.
 ''')
 
+add_chinese_doc('rag.parsing_service.worker.DocumentProcessorWorker.set_schema_extractors', '''
+为 Worker 设置 Schema 提取器。该方法通常由 ``DocumentProcessor`` 在注册 Worker 后自动调用，用于将一组 ``SchemaExtractor`` 实例注入到 Worker 中，使其在处理文档添加任务时能够自动将文档内容按照预定义的 Schema 提取并写入数据库。
+
+同一 Worker 实例可多次调用此方法，后续调用会覆盖之前设置的提取器。
+
+Args:
+    schema_extractors (Dict[str, SchemaExtractor]): Schema 提取器字典，key 为提取器名称，value 为 ``SchemaExtractor`` 实例。
+''')
+
+add_english_doc('rag.parsing_service.worker.DocumentProcessorWorker.set_schema_extractors', '''
+Set the schema extractors for this worker. This method is typically called automatically by ``DocumentProcessor`` after worker registration, injecting a set of ``SchemaExtractor`` instances so the worker can automatically extract document content according to predefined schemas and write the results to the database during document-add tasks.
+
+This method can be called multiple times on the same worker instance; subsequent calls overwrite previously set extractors.
+
+Args:
+    schema_extractors (Dict[str, SchemaExtractor]): A dictionary of schema extractors, where keys are extractor names and values are ``SchemaExtractor`` instances.
+''')
+
 add_example('rag.parsing_service.worker.DocumentProcessorWorker', '''
 ```python
 db_config = {
