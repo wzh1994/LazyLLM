@@ -3207,6 +3207,7 @@ def _run_four_rounds(  # noqa: C901
     agent_instructions: str = '',
     strategy: Optional[Any] = None,
     lint_issues: Optional[List[Dict[str, Any]]] = None,
+    dep_issues: Optional[List[Dict[str, Any]]] = None,
     owner_repo: str = '',
     arch_cache_path: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
@@ -3374,10 +3375,11 @@ def _run_four_rounds(  # noqa: C901
         ]
         # RMod issues always pass through (modification necessity is orthogonal to R3 file coverage)
         lint_tagged = _tag(lint_issues or [], 'lint')
+        dep_tagged = _tag(dep_issues or [], 'dep_check')
         final = _round4_merge_and_deduplicate(
             llm,
             _tag(r1_passthrough, 'r1') + _tag(r2_passthrough, 'r2') + _tag(r3, 'r3')
-            + _tag(rmod, 'rmod') + lint_tagged,
+            + _tag(rmod, 'rmod') + lint_tagged + dep_tagged,
             existing_comments=existing_comments, language=language,
         )
         ckpt.save('final', final)

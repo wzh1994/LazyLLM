@@ -291,12 +291,18 @@ def review(  # noqa: C901
 
     # run lint analysis (independent of LLM rounds)
     lint_issues: List[Dict[str, Any]] = []
+    dep_issues: List[Dict[str, Any]] = []
     if clone_dir and os.path.isdir(clone_dir):
         try:
             from .lint_runner import _run_lint_analysis
             lint_issues = _run_lint_analysis(diff_text, clone_dir)
         except Exception as e:
             lazyllm.LOG.warning(f'Lint analysis failed: {e}')
+        try:
+            from .dep_checker import _run_dep_analysis
+            dep_issues = _run_dep_analysis(diff_text, clone_dir, arch_doc=arch_doc)
+        except Exception as e:
+            lazyllm.LOG.warning(f'Dep analysis failed: {e}')
 
     # ── RScene + RChain: run in parallel with _run_four_rounds ──
     # RScene infers usage scenarios; RChain does call-chain + usability review.
@@ -344,7 +350,8 @@ def review(  # noqa: C901
                 llm, hunks, diff_text, arch_doc, review_spec, pr_summary, ckpt,
                 clone_dir=clone_dir, existing_comments=existing_comments, language=language,
                 agent_instructions=agent_instructions, strategy=strategy,
-                lint_issues=lint_issues, owner_repo=repo, arch_cache_path=arch_cache_path,
+                lint_issues=lint_issues, dep_issues=dep_issues,
+                owner_repo=repo, arch_cache_path=arch_cache_path,
             )
             _fut_rscene = _pool.submit(_run_rscene_rchain)
             final_comments, r3_metrics = _fut_main.result()
@@ -463,6 +470,7 @@ def review(  # noqa: C901
         'truncated_diff_flag': truncated_diff,
         'truncated_hunks_flag': False,  # hunks are processed in sliding windows; per-hunk truncation is not applied
         'lint_issues_count': len(lint_issues),
+        'dep_issues_count': len(dep_issues),
         'rcov_issues_count': len(rcov_issues) if (_rcov_ran or ckpt.get('rcov_issues') is not None) else None,
         'rcov_ran': _rcov_ran,
     }
