@@ -125,7 +125,8 @@ class LazyLLMOnlineChatModuleBase(LazyLLMOnlineBase, LLMBase):
             if 'index' in src[-1]:
                 grouped = [list(g) for _, g in groupby(sorted(src, key=itemget('index')), key=itemget('index'))]
                 if len(grouped) > 1: return [self._merge_stream_result(src) for src in grouped]
-            return {k: self._merge_stream_result([d.get(k) for d in src], k == 'content') for k in set().union(*src)}
+            return {k: self._merge_stream_result([d.get(k) for d in src],
+                    k in ('content', 'arguments')) for k in set().union(*src)}
         return src[-1]
 
     def _extract_partial_content(self, msg_json: list) -> str:

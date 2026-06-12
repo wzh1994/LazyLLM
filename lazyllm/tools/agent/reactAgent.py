@@ -91,14 +91,52 @@ class ReactAgent(LazyLLMAgentBase):
         self._force_summarize = force_summarize
         self._force_summarize_context = force_summarize_context
         self._keep_full_turns = keep_full_turns
+        self._stop_tool_names: set = set()
+
+    def set_stop_tools(self, tools: List[str]) -> 'ReactAgent':
+        '''Declare tools that terminate the ReAct loop immediately after a successful call.
+
+        Calling this method multiple times accumulates tool names (idempotent per name).
+        Returns self for method chaining.
+        '''
+        self._stop_tool_names.update(tools)
+        return self
+
+    def _last_tool_is_stop_tool(self, x: Any) -> bool:
+        if isinstance(x, str) or not self._stop_tool_names:
+            return False
+        try:
+            trace = locals['_lazyllm_agent']['workspace']['tool_call_trace']
+            if trace:
+                last_name = trace[-1].get('function', {}).get('name', '')
+                return last_name in self._stop_tool_names
+        except (KeyError, TypeError, IndexError):
+            pass
+        return False
 
     @once_wrapper(reset_on_pickle=True)
     def build_agent(self):
+        stop_tool_names = self._stop_tool_names
+
+        def _stop_condition(x: Any) -> bool:
+            if isinstance(x, str):
+                return True
+            if stop_tool_names:
+                try:
+                    trace = locals['_lazyllm_agent']['workspace']['tool_call_trace']
+                    if trace:
+                        last_name = trace[-1].get('function', {}).get('name', '')
+                        if last_name in stop_tool_names:
+                            return True
+                except (KeyError, TypeError, IndexError):
+                    pass
+            return False
+
         agent = loop(FunctionCall(llm=self._llm, _prompt=self._prompt, return_trace=self._return_trace,
                                   stream=self._stream, _tool_manager=self._tools_manager,
                                   skill_manager=self._skill_manager,
                                   keep_full_turns=self._keep_full_turns),
-                     stop_condition=lambda x: isinstance(x, str), count=self._max_retries)
+                     stop_condition=_stop_condition, count=self._max_retries)
         self._agent = agent
 
     def _pre_process(self, query: str, llm_chat_history: List[Dict[str, Any]] = None):
@@ -143,6 +181,11 @@ class ReactAgent(LazyLLMAgentBase):
             if completed is not None:
                 return completed
             return ret
+        # When a stop-tool ended the loop, ret is a dict (tool was called but no LLM text
+        # follows). Return an empty string so callers get a clean terminal signal without
+        # triggering the force-summarize path or raising an error.
+        if self._last_tool_is_stop_tool(ret):
+            return ''
         if self._force_summarize:
             try:
                 agent_ctx = locals['_lazyllm_agent']
