@@ -3,7 +3,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lazyllm.tools.rag.doc_node import DocNode
-from lazyllm.tools.rag.doc_service.base import ReparseRequest, UploadRequest, AddFileItem
+from lazyllm.tools.rag.doc_service.base import AddRequest, ReparseRequest, UploadRequest, AddFileItem
+from lazyllm.tools.rag.doc_service.doc_manager import DocManager
 from lazyllm.tools.rag.parsing_service.base import AddDocRequest, FileInfo
 from lazyllm.tools.rag.global_metadata import RAG_DOC_ID, RAG_DOC_PATH, RAG_KB_ID
 from lazyllm.tools.rag.parsing_service.impl import _Processor
@@ -44,6 +45,19 @@ def test_reparse_rejects_vector_rebuild_below_indexed():
 def test_processing_level_defaults_keep_legacy_indexed_behavior():
     request = UploadRequest(items=[AddFileItem(file_path='/tmp/doc.pdf')])
     assert request.processing_level == 'indexed'
+
+
+def test_add_files_preserves_requested_processing_level():
+    manager = object.__new__(DocManager)
+    manager.upload = MagicMock(return_value=[])
+
+    manager.add_files(AddRequest(
+        items=[AddFileItem(file_path='/tmp/doc.pdf')],
+        processing_level='parsed',
+    ))
+
+    upload_request = manager.upload.call_args.args[0]
+    assert upload_request.processing_level == 'parsed'
 
 
 @pytest.mark.parametrize('request_factory', [
